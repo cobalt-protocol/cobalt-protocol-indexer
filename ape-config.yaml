@@ -1,0 +1,14 @@
+name: cobalt-protocol
+
+networks:
+  custom:
+    - name: bot_chain_test_net
+      chain_id: 968
+      ecosystem: bot_chain
+      base_ecosystem_plugin: ethereum
+      default_provider: node
+
+node:
+  bot_chain:
+    bot_chain_test_net:
+      uri: https://rpc.bohr.life
