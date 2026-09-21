@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 from sqlmodel import Column, Field, JSON, SQLModel
 
 
-class IndexerState(SQLModel, table=True):
+class IndexerStateModel(SQLModel, table=True):
     __tablename__ = "indexer_state"
 
     contract_name: str = Field(primary_key=True)
@@ -14,7 +14,7 @@ class IndexerState(SQLModel, table=True):
     )
 
 
-class IndexedEvent(SQLModel, table=True):
+class IndexedEventModel(SQLModel, table=True):
     __tablename__ = "indexed_events"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -30,7 +30,7 @@ class IndexedEvent(SQLModel, table=True):
     )
 
 
-class CompetitionRecord(SQLModel, table=True):
+class CompetitionRecordModel(SQLModel, table=True):
     __tablename__ = "competitions"
 
     id: int = Field(primary_key=True)
@@ -46,7 +46,7 @@ class CompetitionRecord(SQLModel, table=True):
     )
 
 
-class WinnerRecord(SQLModel, table=True):
+class WinnerRecordModel(SQLModel, table=True):
     __tablename__ = "winners"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -61,7 +61,7 @@ class WinnerRecord(SQLModel, table=True):
     )
 
 
-class CertificateParticipantRecord(SQLModel, table=True):
+class CertificateParticipantRecordModel(SQLModel, table=True):
     __tablename__ = "certificate_participants"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -76,7 +76,7 @@ class CertificateParticipantRecord(SQLModel, table=True):
     )
 
 
-class CertificateParticipantWinnerRecord(SQLModel, table=True):
+class CertificateParticipantWinnerRecordModel(SQLModel, table=True):
     __tablename__ = "certificate_participant_winners"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -92,7 +92,7 @@ class CertificateParticipantWinnerRecord(SQLModel, table=True):
     )
 
 
-class FeeSettingRecord(SQLModel, table=True):
+class FeeSettingRecordModel(SQLModel, table=True):
     __tablename__ = "fee_settings"
 
     fee_id: int = Field(primary_key=True)
@@ -106,7 +106,7 @@ class FeeSettingRecord(SQLModel, table=True):
     )
 
 
-class ListingTokenPrizeRecord(SQLModel, table=True):
+class ListingTokenPrizeRecordModel(SQLModel, table=True):
     __tablename__ = "listing_token_prizes"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -119,7 +119,7 @@ class ListingTokenPrizeRecord(SQLModel, table=True):
     )
 
 
-class SignerAddressRecord(SQLModel, table=True):
+class SignerAddressRecordModel(SQLModel, table=True):
     __tablename__ = "signer_addresses"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -132,7 +132,7 @@ class SignerAddressRecord(SQLModel, table=True):
     )
 
 
-class TreasuryPlatformRecord(SQLModel, table=True):
+class TreasuryPlatformRecordModel(SQLModel, table=True):
     __tablename__ = "treasury_records"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -145,3 +145,4 @@ class TreasuryPlatformRecord(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+

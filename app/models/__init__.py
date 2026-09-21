@@ -1,25 +1,50 @@
 from .indexer import (
-    IndexerState,
-    IndexedEvent,
-    CompetitionRecord,
-    WinnerRecord,
-    CertificateParticipantRecord,
-    CertificateParticipantWinnerRecord,
-    FeeSettingRecord,
-    ListingTokenPrizeRecord,
-    SignerAddressRecord,
-    TreasuryPlatformRecord,
+    IndexerStateModel,
+    IndexedEventModel,
+    CompetitionRecordModel,
+    WinnerRecordModel,
+    CertificateParticipantRecordModel,
+    CertificateParticipantWinnerRecordModel,
+    FeeSettingRecordModel,
+    ListingTokenPrizeRecordModel,
+    SignerAddressRecordModel,
+    TreasuryPlatformRecordModel,
 )
+from .user import UserModel
+from .skill import SkillModel
+from .skill_description import SkillDescriptionModel
+from .social_media import SocialMediaModel
+from .organization import OrganizationModel
+from .competition import CompetitionModel
+from .prize_winner import PrizeWinnerModel
+from .team import TeamModel
+from .skills_suggestion import SkillsSuggestionModel
+from .team_code import TeamCodeModel
+from .team_role import TeamRoleModel
 
 __all__ = [
-    "IndexerState",
-    "IndexedEvent",
-    "CompetitionRecord",
-    "WinnerRecord",
-    "CertificateParticipantRecord",
-    "CertificateParticipantWinnerRecord",
-    "FeeSettingRecord",
-    "ListingTokenPrizeRecord",
-    "SignerAddressRecord",
-    "TreasuryPlatformRecord",
+    "IndexerStateModel",
+    "IndexedEventModel",
+    "CompetitionRecordModel",
+    "WinnerRecordModel",
+    "CertificateParticipantRecordModel",
+    "CertificateParticipantWinnerRecordModel",
+    "FeeSettingRecordModel",
+    "ListingTokenPrizeRecordModel",
+    "SignerAddressRecordModel",
+    "TreasuryPlatformRecordModel",
+    "UserModel",
+    "SkillModel",
+    "SkillDescriptionModel",
+    "SocialMediaModel",
+    "OrganizationModel",
+    "CompetitionModel",
+    "PrizeWinnerModel",
+    "TeamModel",
+    "SkillsSuggestionModel",
+    "TeamCodeModel",
+    "TeamRoleModel",
 ]
+
+
+
