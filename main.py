@@ -5,12 +5,13 @@ from contextlib import asynccontextmanager
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
 
 from fastapi import FastAPI
-from app.configs import settings
+from app.configs import settings, create_db_and_tables
 from app.indexer import indexer_service, indexer_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    create_db_and_tables()
     await indexer_service.start()
     try:
         yield
