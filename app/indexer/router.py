@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.indexer.service import indexer_service
+from app.utils.indexer import indexer_service
 
 router = APIRouter(prefix="/indexer", tags=["Web3 Indexer"])
 

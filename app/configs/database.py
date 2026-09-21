@@ -26,11 +26,6 @@ SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_eng
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-def create_db_and_tables() -> None:
-    import app.models  # noqa: F401
-    SQLModel.metadata.create_all(sync_engine)
-
-
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
