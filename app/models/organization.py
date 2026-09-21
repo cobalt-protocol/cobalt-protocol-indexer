@@ -3,6 +3,7 @@ from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Column, DateTime
 from sqlalchemy.sql import func
+from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.user import UserModel
@@ -11,11 +12,15 @@ if TYPE_CHECKING:
 class OrganizationModel(SQLModel, table=True):
     __tablename__ = "organization"
 
-    id: str = Field(primary_key=True)
-    avatar_url: str = Field(unique=True)
-    name: str = Field(unique=True)
-    description: str = Field(unique=True)
+    id: str = Field(default_factory=generate_ulid, primary_key=True)
+    tx_hash: str = Field(unique=True)
+
+    avatar_url: Optional[str] = Field(default=None, unique=True)
+    name: Optional[str] = Field(default=None, unique=True)
+    description: Optional[str] = Field(default=None, unique=True)
+
     user_id: str = Field(foreign_key="users.id")
+
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -37,6 +42,3 @@ class OrganizationModel(SQLModel, table=True):
     )
 
     user: Optional["UserModel"] = Relationship(back_populates="organizations")
-
-
-

@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
 from fastapi import FastAPI
 from app.configs import settings, create_db_and_tables
 from app.utils.indexer import indexer_service
-from app.indexer import indexer_router
 
 
 @asynccontextmanager
@@ -28,8 +27,6 @@ app = FastAPI(
     openapi_url=None if settings.is_production else "/openapi.json",
     lifespan=lifespan,
 )
-
-app.include_router(indexer_router)
 
 
 @app.get("/")

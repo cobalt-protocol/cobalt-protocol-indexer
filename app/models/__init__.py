@@ -10,6 +10,9 @@ from .skills_suggestion import SkillsSuggestionModel
 from .team_code import TeamCodeModel
 from .team_role import TeamRoleModel
 from .winner import WinnerModel
+from .nonce_connect import NonceConnectModel
+from .nonce_certificate_participant import NonceCertificateParticipantModel
+from .nonce_certificate_winner import NonceCertificateWinnerModel
 
 __all__ = [
     "UserModel",
@@ -24,7 +27,15 @@ __all__ = [
     "TeamCodeModel",
     "TeamRoleModel",
     "WinnerModel",
+    "NonceConnectModel",
+    "NonceCertificateParticipantModel",
+    "NonceCertificateWinnerModel",
 ]
+
+
+
+
+
 
 
 

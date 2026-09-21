@@ -3,6 +3,7 @@ from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Column, DateTime
 from sqlalchemy.sql import func
+from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.team import TeamModel
@@ -11,7 +12,7 @@ if TYPE_CHECKING:
 class SkillsSuggestionModel(SQLModel, table=True):
     __tablename__ = "skills_suggestion"
 
-    id: str = Field(primary_key=True)
+    id: str = Field(default_factory=generate_ulid, primary_key=True)
     name: str
     team_id: str = Field(foreign_key="team.id")
     created_at: Optional[datetime] = Field(

@@ -61,11 +61,10 @@ class Web3Indexer:
                 settings.listing_token_prize_contract,
                 "ListingTokenPrizeContract.json",
             ),
-            ("FeeManager", settings.fee_manager_contract, "FeeManager.json"),
             (
-                "FeeManagerCompetition",
-                settings.fee_manager_competition_contract,
-                "FeeManagerCompetition.json",
+                "PriceCompetitionManager",
+                settings.price_competition_manager_contract,
+                "PriceCompetitionManager.json",
             ),
             (
                 "SignerManager",
@@ -252,6 +251,13 @@ class Web3Indexer:
             print(f"     End At:          {args.get('endAt')}")
             print(f"     Certificate CID: {args.get('certificateCID')}")
 
+        elif event_name == "CompetitionFeePaid":
+            print(f"  💳 Competition Fee Paid:")
+            print(f"     Competition ID: {args.get('competitionId')}")
+            print(f"     Payer:          {args.get('payer')}")
+            print(f"     Token Address:  {args.get('tokenAddress')}")
+            print(f"     Amount:         {args.get('amount')}")
+
         elif event_name == "WinnerSet":
             print(f"  🥇 Winner Set:")
             print(f"     Winner ID:            {args.get('winnerId')}")
@@ -271,12 +277,21 @@ class Web3Indexer:
             print(f"     Token Address: {args.get('tokenAddress')}")
             print(f"     Is Active:     {args.get('isActive')}")
 
-        elif event_name == "FeesSet":
-            print(f"  💰 Fees Set:")
-            print(f"     ID:           {args.get('id')}")
-            print(f"     Treasury Fee: {args.get('treasuryFee')}")
-            print(f"     Title:        {args.get('title')}")
-            print(f"     Description:  {args.get('description')}")
+        elif event_name == "PriceCompetitionFeeSet":
+            print(f"  💰 Price Competition Fee Set:")
+            print(f"     ID:            {args.get('id')}")
+            print(f"     Treasury Fee:  {args.get('treasuryFee')}")
+            print(f"     Token Address: {args.get('tokenAddress')}")
+            print(f"     Title:         {args.get('title')}")
+            print(f"     Description:   {args.get('description')}")
+
+        elif event_name == "PriceCompetitionFeeUpdated":
+            print(f"  🔄 Price Competition Fee Updated:")
+            print(f"     ID:            {args.get('id')}")
+            print(f"     Treasury Fee:  {args.get('treasuryFee')}")
+            print(f"     Token Address: {args.get('tokenAddress')}")
+            print(f"     Title:         {args.get('title')}")
+            print(f"     Description:   {args.get('description')}")
 
         elif event_name == "SignerAddressSet":
             print(f"  ✍️  Signer Address Set:")

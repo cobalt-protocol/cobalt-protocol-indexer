@@ -6,18 +6,19 @@ from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 if TYPE_CHECKING:
+    from app.models.user import UserModel
     from app.models.competition import CompetitionModel
-    from app.models.winner import WinnerModel
 
 
-class PrizeWinnerModel(SQLModel, table=True):
-    __tablename__ = "prize_winner"
+class NonceCertificateWinnerModel(SQLModel, table=True):
+    __tablename__ = "nonce_certificate_winner"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    category: str
-    amount: int
-    certificate_cid: str
+    nonce: str = Field(unique=True)
+
+    user_id: str = Field(foreign_key="users.id")
     competition_id: str = Field(foreign_key="competition.id")
+
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -38,11 +39,9 @@ class PrizeWinnerModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    competition: Optional["CompetitionModel"] = Relationship(
-        back_populates="prize_winners"
+    user: Optional["UserModel"] = Relationship(
+        back_populates="nonce_certificate_winners"
     )
-    winner: Optional["WinnerModel"] = Relationship(back_populates="prize_winner")
-
-
-
-
+    competition: Optional["CompetitionModel"] = Relationship(
+        back_populates="nonce_certificate_winner"
+    )

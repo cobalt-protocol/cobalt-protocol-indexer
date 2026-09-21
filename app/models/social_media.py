@@ -3,6 +3,7 @@ from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Column, DateTime
 from sqlalchemy.sql import func
+from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.user import UserModel
@@ -11,7 +12,7 @@ if TYPE_CHECKING:
 class SocialMediaModel(SQLModel, table=True):
     __tablename__ = "social_media"
 
-    id: str = Field(primary_key=True)
+    id: str = Field(default_factory=generate_ulid, primary_key=True)
     github_link: str
     linkedin_link: str
     user_id: str = Field(unique=True, foreign_key="users.id")

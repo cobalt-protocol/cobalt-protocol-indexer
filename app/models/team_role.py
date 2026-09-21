@@ -3,6 +3,7 @@ from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Column, DateTime
 from sqlalchemy.sql import func
+from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.user import UserModel
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
 class TeamRoleModel(SQLModel, table=True):
     __tablename__ = "team_role"
 
-    id: str = Field(primary_key=True)
+    id: str = Field(default_factory=generate_ulid, primary_key=True)
     role: str
     user_id: str = Field(foreign_key="users.id")
     team_id: str = Field(foreign_key="team.id")

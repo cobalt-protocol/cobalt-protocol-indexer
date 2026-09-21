@@ -3,6 +3,7 @@ from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Column, DateTime
 from sqlalchemy.sql import func
+from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.competition import CompetitionModel
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 class TeamModel(SQLModel, table=True):
     __tablename__ = "team"
 
-    id: str = Field(primary_key=True)
+    id: str = Field(default_factory=generate_ulid, primary_key=True)
     name: str
     visibility: bool
     description: str
