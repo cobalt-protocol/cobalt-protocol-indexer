@@ -6,6 +6,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.configs.database import AsyncSessionLocal
 from app.models.user import UserModel
 from app.models.competition import CompetitionModel
+from app.models.organization import OrganizationModel
 
 
 class CompetitionDatabases:
@@ -40,6 +41,21 @@ class CompetitionDatabases:
                 await db.commit()
                 await db.refresh(user)
 
+            org_statement = select(OrganizationModel).where(
+                OrganizationModel.user_id == user.id
+            )
+            org_result = await db.exec(org_statement)
+            organization = org_result.first()
+
+            if not organization:
+                organization = OrganizationModel(
+                    tx_hash=tx_hash,
+                    user_id=user.id,
+                )
+                db.add(organization)
+                await db.commit()
+                await db.refresh(organization)
+
             competition = CompetitionModel(
                 tx_hash=tx_hash,
                 name=name,
@@ -65,5 +81,3 @@ class CompetitionDatabases:
         else:
             async with AsyncSessionLocal() as db:
                 return await _impl(db)
-
-

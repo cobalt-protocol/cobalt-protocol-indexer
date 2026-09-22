@@ -9,10 +9,10 @@ class Settings(BaseSettings):
     debug: bool = False
     database_url: str = "sqlite:///./kelola_limbah.db"
 
-    # Smart Contract Configuration
     certificate_competition_contract: str | None = None
     competition_contract: str | None = None
     treasury_platform_contract: str | None = None
+    treasury_prize_contract: str | None = None
     listing_token_prize_contract: str | None = None
     price_competition_manager_contract: str | None = None
     prize_competition_manager_contract: str | None = None
@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     signer_manager_certificate_contract: str | None = None
     certificate_manager_contract: str | None = None
 
-    # Web3 / Indexer Configuration
     web3_rpc_url: str = "https://rpc.bohr.life"
     web3_poll_interval: int = 5
     web3_start_block: int | None = None

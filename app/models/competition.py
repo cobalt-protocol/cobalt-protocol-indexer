@@ -25,12 +25,24 @@ class CompetitionModel(SQLModel, table=True):
     category: str
     description: str
     requirement: str
-    registration_window: datetime
-    competition_window: datetime
-    submission_deadline: datetime
-    judging_review: datetime
-    result_announcement: datetime
-    pirze_certificate_claim: datetime
+    registration_window: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    competition_window: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    submission_deadline: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    judging_review: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    result_announcement: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    pirze_certificate_claim: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
     certificate_cid: str
     guidebook_cid: str
     created_at: Optional[datetime] = Field(

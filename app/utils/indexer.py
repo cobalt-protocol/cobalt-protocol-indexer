@@ -1,28 +1,49 @@
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+from eth_utils import event_abi_to_log_topic
 from hexbytes import HexBytes
 from web3 import AsyncHTTPProvider, AsyncWeb3
 from web3.contract import AsyncContract
-
 from app.configs import settings
 
 logger = logging.getLogger("web3_indexer")
 logger.setLevel(logging.INFO)
 
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    _handler.setFormatter(_formatter)
+    logger.addHandler(_handler)
+
 
 def _clean_args(args: Any) -> Any:
     if isinstance(args, (bytes, HexBytes)):
         return args.hex()
-    elif isinstance(args, dict):
-        return {k: _clean_args(v) for k, v in args.items()}
-    elif isinstance(args, (list, tuple)):
+    elif isinstance(args, (dict, Mapping)):
+        return {str(k): _clean_args(v) for k, v in args.items()}
+    elif isinstance(args, (list, tuple, set)):
         return [_clean_args(x) for x in args]
     return args
+
+
+def _parse_timestamp(val: Any) -> datetime:
+    if isinstance(val, (int, float)):
+        return datetime.fromtimestamp(val, tz=timezone.utc)
+    elif isinstance(val, str) and val.isdigit():
+        return datetime.fromtimestamp(int(val), tz=timezone.utc)
+    elif isinstance(val, datetime):
+        if val.tzinfo is None:
+            return val.replace(tzinfo=timezone.utc)
+        return val
+    return datetime.now(timezone.utc)
 
 
 class Web3Indexer:
@@ -55,6 +76,11 @@ class Web3Indexer:
                 "TreasuryPlatform",
                 settings.treasury_platform_contract,
                 "TreasuryPlatform.json",
+            ),
+            (
+                "TreasuryPrize",
+                settings.treasury_prize_contract,
+                "TreasuryPrize.json",
             ),
             (
                 "ListingTokenPrize",
@@ -97,11 +123,7 @@ class Web3Indexer:
                 for item in abi:
                     if item.get("type") == "event":
                         event_name = item["name"]
-                        inputs = ",".join(
-                            [inp["type"] for inp in item.get("inputs", [])]
-                        )
-                        sig = f"{event_name}({inputs})"
-                        topic0 = self.w3.keccak(text=sig).hex()
+                        topic0 = event_abi_to_log_topic(item).hex()
                         topic_map[topic0] = event_name
 
                 self.contract_configs.append(
@@ -187,7 +209,7 @@ class Web3Indexer:
             )
 
             for log in logs:
-                self._process_log(cfg, log)
+                await self._process_log(cfg, log)
 
             self.last_scanned_blocks[name] = to_block
             self.last_updated_at[name] = datetime.now(timezone.utc).isoformat()
@@ -197,7 +219,7 @@ class Web3Indexer:
                 f"Error indexing {name} from block {from_block} to {to_block}: {e}"
             )
 
-    def _process_log(self, cfg: Dict[str, Any], log: Any):
+    async def _process_log(self, cfg: Dict[str, Any], log: Any):
         name = cfg["name"]
         address = cfg["address"]
         contract: AsyncContract = cfg["contract"]
@@ -233,8 +255,65 @@ class Web3Indexer:
 
             self._print_event_details(event_name, cleaned_args)
 
+            if event_name == "CompetitionCreated":
+                await self._handle_competition_created(tx_hash, cleaned_args)
+
         except Exception as e:
             logger.error(f"Error processing log {tx_hash}:{log_index}: {e}")
+
+    async def _handle_competition_created(self, tx_hash: str, args: Dict[str, Any]):
+        try:
+            from app.databases.competition import CompetitionDatabases
+
+            comp = (
+                args.get("competition")
+                if isinstance(args.get("competition"), dict)
+                else {}
+            )
+            sched = (
+                comp.get("schedule") if isinstance(comp.get("schedule"), dict) else {}
+            )
+
+            wallet_address = args.get("organization") or comp.get("organization") or ""
+            name = comp.get("name", "")
+            category = comp.get("category", "")
+            description = comp.get("description", "")
+            requirement = comp.get("requirements", "")
+            certificate_cid = comp.get("certificateCID", "")
+            guidebook_cid = comp.get("guideBookCID", "")
+
+            registration_window = _parse_timestamp(sched.get("registrationWindow"))
+            competition_window = _parse_timestamp(sched.get("competitionWindow"))
+            submission_deadline = _parse_timestamp(sched.get("submissionDeadline"))
+            judging_review = _parse_timestamp(sched.get("judgingReview"))
+            result_announcement = _parse_timestamp(sched.get("resultAnnouncement"))
+            pirze_certificate_claim = _parse_timestamp(
+                sched.get("prizeCertificateClaim")
+            )
+
+            saved_comp = await CompetitionDatabases.add_competition(
+                wallet_address=wallet_address,
+                tx_hash=tx_hash,
+                name=name,
+                category=category,
+                description=description,
+                requirement=requirement,
+                registration_window=registration_window,
+                competition_window=competition_window,
+                submission_deadline=submission_deadline,
+                judging_review=judging_review,
+                result_announcement=result_announcement,
+                pirze_certificate_claim=pirze_certificate_claim,
+                certificate_cid=certificate_cid,
+                guidebook_cid=guidebook_cid,
+            )
+            logger.info(
+                f"Successfully saved Competition to DB with ID: {saved_comp.id} (tx: {tx_hash})"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to save CompetitionCreated event to DB (tx: {tx_hash}): {e}"
+            )
 
     def _print_event_details(self, event_name: str, args: Dict[str, Any]):
         if event_name == "OwnershipTransferred":
@@ -242,14 +321,41 @@ class Web3Indexer:
             print(f"     Previous Owner: {args.get('previousOwner')}")
             print(f"     New Owner:      {args.get('newOwner')}")
 
+        elif event_name == "OwnerUpdated":
+            print(f"  🔑 Owner Updated:")
+            print(
+                f"     Address Owner:  {args.get('addressOwner') or args.get('newOwner')}"
+            )
+
         elif event_name == "CompetitionCreated":
+            comp = (
+                args.get("competition")
+                if isinstance(args.get("competition"), dict)
+                else {}
+            )
+            sched = (
+                comp.get("schedule") if isinstance(comp.get("schedule"), dict) else {}
+            )
             print(f"  🏆 Competition Created:")
-            print(f"     ID:              {args.get('id')}")
-            print(f"     Organization:    {args.get('organization')}")
-            print(f"     Name:            {args.get('name')}")
-            print(f"     Category:        {args.get('category')}")
-            print(f"     End At:          {args.get('endAt')}")
-            print(f"     Certificate CID: {args.get('certificateCID')}")
+            print(f"     ID:                      {args.get('id') or comp.get('id')}")
+            print(
+                f"     Creator Wallet (Org):    {args.get('organization') or comp.get('organization')}"
+            )
+            print(f"     Name:                    {comp.get('name')}")
+            print(f"     Category:                {comp.get('category')}")
+            print(f"     Description:             {comp.get('description')}")
+            print(f"     Requirements:            {comp.get('requirements')}")
+            print(f"     Schedule:")
+            print(f"       Registration Window:   {sched.get('registrationWindow')}")
+            print(f"       Competition Window:    {sched.get('competitionWindow')}")
+            print(f"       Submission Deadline:   {sched.get('submissionDeadline')}")
+            print(f"       Judging Review:        {sched.get('judgingReview')}")
+            print(f"       Result Announcement:   {sched.get('resultAnnouncement')}")
+            print(
+                f"       Prize Certificate Claim: {sched.get('prizeCertificateClaim')}"
+            )
+            print(f"     Certificate CID:         {comp.get('certificateCID')}")
+            print(f"     Guidebook CID:           {comp.get('guideBookCID')}")
 
         elif event_name == "CompetitionFeePaid":
             print(f"  💳 Competition Fee Paid:")
@@ -260,10 +366,11 @@ class Web3Indexer:
 
         elif event_name == "WinnerSet":
             print(f"  🥇 Winner Set:")
-            print(f"     Winner ID:            {args.get('winnerId')}")
+            print(f"     Winner ID:             {args.get('winnerId')}")
             print(f"     Participant:           {args.get('participant')}")
             print(f"     Competition ID:        {args.get('competitionId')}")
             print(f"     Participant Winner ID: {args.get('participantWinnerId')}")
+            print(f"     Title:                 {args.get('title')}")
 
         elif event_name == "ListingTokenPrizeAdded":
             print(f"  📌 ListingTokenPrize Added:")
@@ -293,8 +400,8 @@ class Web3Indexer:
             print(f"     Title:         {args.get('title')}")
             print(f"     Description:   {args.get('description')}")
 
-        elif event_name == "SignerAddressSet":
-            print(f"  ✍️  Signer Address Set:")
+        elif event_name == "SignerAddressUpdated":
+            print(f"  ✍️  Signer Address Updated:")
             print(f"     Signer Address: {args.get('signerAddress')}")
 
         elif event_name == "TreasuryAdded":
@@ -302,6 +409,22 @@ class Web3Indexer:
             print(f"     Token Address: {args.get('tokenAddress')}")
             print(f"     Sender:        {args.get('sender')}")
             print(f"     Amount:        {args.get('amount')}")
+
+        elif event_name == "PrizeDeposited":
+            print(f"  💰 Prize Deposited:")
+            print(f"     Treasury Prize ID: {args.get('treasuryPrizeId')}")
+            print(f"     Competition ID:    {args.get('competitionId')}")
+            print(f"     Token Address:     {args.get('tokenAddress')}")
+            print(f"     Sender:            {args.get('sender')}")
+            print(f"     Amount:            {args.get('amount')}")
+
+        elif event_name == "PrizeDistributed":
+            print(f"  🎁 Prize Distributed:")
+            print(f"     Treasury Prize ID: {args.get('treasuryPrizeId')}")
+            print(f"     Competition ID:    {args.get('competitionId')}")
+            print(f"     Token Address:     {args.get('tokenAddress')}")
+            print(f"     Recipient:         {args.get('recipient')}")
+            print(f"     Amount:            {args.get('amount')}")
 
         elif event_name == "NativeReceived":
             print(f"  💎 Native Received:")
