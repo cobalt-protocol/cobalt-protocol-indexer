@@ -13,6 +13,12 @@ from .winner import WinnerModel
 from .nonce_connect import NonceConnectModel
 from .nonce_certificate_participant import NonceCertificateParticipantModel
 from .nonce_certificate_winner import NonceCertificateWinnerModel
+from .listing_token_prize import ListingTokenPrizeModel
+from .prize_deposited import PrizeDepositedModel
+from .price_competition import PriceCompetitionModel
+from .competition_fee_paid import CompetitionFeePaidModel
+from .participant_winner import ParticipantWinnerModel
+from .prize_distributed import PrizeDistributedModel
 
 __all__ = [
     "UserModel",
@@ -30,12 +36,10 @@ __all__ = [
     "NonceConnectModel",
     "NonceCertificateParticipantModel",
     "NonceCertificateWinnerModel",
+    "ListingTokenPrizeModel",
+    "PrizeDepositedModel",
+    "PriceCompetitionModel",
+    "CompetitionFeePaidModel",
+    "ParticipantWinnerModel",
+    "PrizeDistributedModel",
 ]
-
-
-
-
-
-
-
-

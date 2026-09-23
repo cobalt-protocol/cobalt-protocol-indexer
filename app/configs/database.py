@@ -28,6 +28,7 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 
 def create_db_and_tables() -> None:
     import app.models  # noqa: F401
+
     SQLModel.metadata.create_all(sync_engine)
 
 

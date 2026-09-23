@@ -31,9 +31,9 @@ class SocialMediaModel(SQLModel, table=True):
             nullable=True,
         ),
     )
-    deleted_at: Optional[int] = Field(default=None)
+    deleted_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
 
     user: Optional["UserModel"] = Relationship(back_populates="social_media")
-
-
-

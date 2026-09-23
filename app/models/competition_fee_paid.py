@@ -1,20 +1,23 @@
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, Numeric
 from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 if TYPE_CHECKING:
-    from app.models.user import UserModel
+    from app.models.competition import CompetitionModel
 
 
-class SkillDescriptionModel(SQLModel, table=True):
-    __tablename__ = "skill_description"
+class CompetitionFeePaidModel(SQLModel, table=True):
+    __tablename__ = "competition_fee_paid"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    description: str
-    user_id: str = Field(unique=True, foreign_key="users.id")
+    tx_hash: str
+    competition_id: str = Field(foreign_key="competition.id", unique=True)
+    payer: str
+    token_address: str
+    amount: int = Field(sa_type=Numeric(78, 0))
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -35,7 +38,6 @@ class SkillDescriptionModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    user: Optional["UserModel"] = Relationship(back_populates="skill_description")
-
-
-
+    competition: Optional["CompetitionModel"] = Relationship(
+        back_populates="competition_fee_paid"
+    )

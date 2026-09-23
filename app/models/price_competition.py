@@ -1,20 +1,24 @@
 from datetime import datetime
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, BigInteger, Numeric
 from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 if TYPE_CHECKING:
-    from app.models.user import UserModel
+    from app.models.competition import CompetitionModel
 
 
-class SkillDescriptionModel(SQLModel, table=True):
-    __tablename__ = "skill_description"
+class PriceCompetitionModel(SQLModel, table=True):
+    __tablename__ = "price_competition"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
+    tx_hash: str
+    price_competition_fee_id: int = Field(unique=True, sa_type=BigInteger)
+    treasury_fee: int = Field(sa_type=Numeric(78, 0))
+    token_address: str
+    title: str
     description: str
-    user_id: str = Field(unique=True, foreign_key="users.id")
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -35,7 +39,8 @@ class SkillDescriptionModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    user: Optional["UserModel"] = Relationship(back_populates="skill_description")
-
+    competitions: List["CompetitionModel"] = Relationship(
+        back_populates="price_competition"
+    )
 
 

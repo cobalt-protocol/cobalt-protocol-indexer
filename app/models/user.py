@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.models.nonce_connect import NonceConnectModel
     from app.models.nonce_certificate_participant import NonceCertificateParticipantModel
     from app.models.nonce_certificate_winner import NonceCertificateWinnerModel
+    from app.models.competition import CompetitionModel
 
 
 class UserModel(SQLModel, table=True):
@@ -67,6 +68,9 @@ class UserModel(SQLModel, table=True):
     nonce_certificate_winners: List[
         "NonceCertificateWinnerModel"
     ] = Relationship(back_populates="user")
+    competitions: List["CompetitionModel"] = Relationship(
+        back_populates="user"
+    )
 
 
 
