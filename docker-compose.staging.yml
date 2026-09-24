@@ -8,14 +8,14 @@ services:
     ports:
       - "${KUBO_SWARM_PORT:-4001}:4001"
       # Bind API to localhost only on the host machine to allow Web UI access safely
-      - "${KUBO_API_PORT:-5001}:5001"
+      - "127.0.0.1:${KUBO_API_PORT:-5001}:5001"
       - "${KUBO_GATEWAY_PORT:-8081}:8080"
     environment:
       IPFS_PROFILE: server
     volumes:
       - kubo_staging_data:/data/ipfs:U
       - kubo_staging_export:/export:U
-      - ./kubo-init.sh:/container-init.d/01-bind-api.sh:ro
+      - ./scripts/kubo-init.sh:/container-init.d/01-bind-api.sh:ro
     networks:
       default:
         aliases:

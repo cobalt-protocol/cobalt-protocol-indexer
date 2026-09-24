@@ -10,6 +10,7 @@ from hexbytes import HexBytes
 from web3 import AsyncHTTPProvider, AsyncWeb3
 from web3.contract import AsyncContract
 from app.configs import settings
+from app.databases.indexer_state import IndexerStateDatabases
 
 logger = logging.getLogger("web3_indexer")
 logger.setLevel(logging.INFO)
@@ -198,11 +199,18 @@ class Web3Indexer:
         address = cfg["address"]
 
         if name not in self.last_scanned_blocks:
-            if settings.web3_start_block is not None:
+            db_block = await IndexerStateDatabases.get_last_scanned_block(name)
+            if db_block is not None:
+                self.last_scanned_blocks[name] = db_block
+                logger.info(
+                    f"Restored last_scanned_block for {name} from DB: {db_block}"
+                )
+            elif settings.web3_start_block is not None:
                 from_block = settings.web3_start_block
+                self.last_scanned_blocks[name] = max(0, from_block - 1)
             else:
                 from_block = max(0, latest_block - 100)
-            self.last_scanned_blocks[name] = max(0, from_block - 1)
+                self.last_scanned_blocks[name] = max(0, from_block - 1)
 
         from_block = self.last_scanned_blocks[name] + 1
         if from_block > latest_block:
@@ -225,6 +233,7 @@ class Web3Indexer:
 
             self.last_scanned_blocks[name] = to_block
             self.last_updated_at[name] = datetime.now(timezone.utc).isoformat()
+            await IndexerStateDatabases.set_last_scanned_block(name, to_block)
 
         except Exception as e:
             logger.error(

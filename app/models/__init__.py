@@ -19,6 +19,7 @@ from .price_competition import PriceCompetitionModel
 from .competition_fee_paid import CompetitionFeePaidModel
 from .participant_winner import ParticipantWinnerModel
 from .prize_distributed import PrizeDistributedModel
+from .indexer_state import IndexerStateModel
 
 __all__ = [
     "UserModel",
@@ -42,4 +43,5 @@ __all__ = [
     "CompetitionFeePaidModel",
     "ParticipantWinnerModel",
     "PrizeDistributedModel",
+    "IndexerStateModel",
 ]
