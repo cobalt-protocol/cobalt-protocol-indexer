@@ -469,6 +469,7 @@ class Web3Indexer:
             category = comp.get("category", "")
             description = comp.get("description", "")
             requirement = comp.get("requirements") or comp.get("requirement") or ""
+            formation = comp.get("formation", "")
             certificate_cid = comp.get("certificateCID", "")
             guidebook_cid = comp.get("guideBookCID", "")
 
@@ -500,6 +501,7 @@ class Web3Indexer:
                 category=category,
                 description=description,
                 requirement=requirement,
+                formation=formation,
                 registration_window=registration_window,
                 competition_window=competition_window,
                 submission_deadline=submission_deadline,
@@ -549,9 +551,8 @@ class Web3Indexer:
             print(f"     Name:                    {comp.get('name')}")
             print(f"     Category:                {comp.get('category')}")
             print(f"     Description:             {comp.get('description')}")
-            print(
-                f"     Requirements:            {comp.get('requirements') or comp.get('requirement')}"
-            )
+            print(f"     Requirements:            {comp.get('requirements') or comp.get('requirement')}")
+            print(f"     Formation:               {comp.get('formation')}")
             print(f"     Schedule:")
             print(f"       Registration Window:   {sched.get('registrationWindow')}")
             print(f"       Competition Window:    {sched.get('competitionWindow')}")

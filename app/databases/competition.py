@@ -49,6 +49,7 @@ class CompetitionDatabases:
             "category": "",
             "description": "",
             "requirement": "",
+            "formation": "",
             "registration_window": now,
             "competition_window": now,
             "submission_deadline": now,
@@ -84,6 +85,7 @@ class CompetitionDatabases:
         certificate_cid: str,
         guidebook_cid: str,
         competition_id: str,
+        formation: str = "",
         price_competition_fee_id: Optional[int] = None,
         winners: Optional[List[Dict[str, Any]]] = None,
         session: Optional[AsyncSession] = None,
@@ -153,6 +155,7 @@ class CompetitionDatabases:
                 existing.category = category
                 existing.description = description
                 existing.requirement = requirement
+                existing.formation = formation
                 existing.registration_window = registration_window
                 existing.competition_window = competition_window
                 existing.submission_deadline = submission_deadline
@@ -180,6 +183,7 @@ class CompetitionDatabases:
                     "category": category,
                     "description": description,
                     "requirement": requirement,
+                    "formation": formation,
                     "registration_window": registration_window,
                     "competition_window": competition_window,
                     "submission_deadline": submission_deadline,
