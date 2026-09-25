@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from eth_utils import event_abi_to_log_topic
 from hexbytes import HexBytes
+import httpx
 from web3 import AsyncHTTPProvider, AsyncWeb3
 from web3.contract import AsyncContract
 from app.configs import settings
@@ -65,58 +66,83 @@ class Web3Indexer:
         self.contract_configs: List[Dict[str, Any]] = []
         self.last_scanned_blocks: Dict[str, int] = {}
         self.last_updated_at: Dict[str, str] = {}
+        self._ipfs_cache: Dict[str, Dict[str, Any]] = {}
+
+    async def _fetch_from_ipfs(self, cid: str) -> Dict[str, Any]:
+        if not cid or not isinstance(cid, str):
+            return {}
+        cid = cid.strip()
+        if cid.startswith("ipfs://"):
+            cid = cid[7:]
+        if not cid:
+            return {}
+
+        if cid in self._ipfs_cache:
+            return self._ipfs_cache[cid]
+
+        candidates = []
+        base_api = (settings.kubo_api_url or "http://localhost:5001").rstrip("/")
+        candidates.append(("POST", f"{base_api}/api/v0/cat?arg={cid}"))
+
+        if "kubo" in base_api:
+            candidates.append(("POST", f"http://localhost:5001/api/v0/cat?arg={cid}"))
+
+        gw_url = (settings.kubo_gateway_url or "http://localhost:8082").rstrip("/")
+        candidates.append(("GET", f"{gw_url}/ipfs/{cid}"))
+        if "localhost" not in gw_url:
+            candidates.append(("GET", f"http://localhost:8082/ipfs/{cid}"))
+
+        unique_candidates = []
+        seen = set()
+        for method, url in candidates:
+            if url not in seen:
+                seen.add(url)
+                unique_candidates.append((method, url))
+
+        last_error = None
+        async with httpx.AsyncClient() as client:
+            for method, url in unique_candidates:
+                try:
+                    if method == "POST":
+                        res = await client.post(url, timeout=5.0)
+                    else:
+                        res = await client.get(url, timeout=5.0)
+                    if res.status_code == 200:
+                        try:
+                            data = res.json()
+                            if isinstance(data, dict):
+                                self._ipfs_cache[cid] = data
+                                return data
+                            return {}
+                        except Exception as parse_err:
+                            logger.debug(
+                                f"IPFS CID {cid} response from {url} is not JSON: {parse_err}"
+                            )
+                            return {}
+                except Exception as e:
+                    last_error = e
+
+        logger.warning(
+            f"Failed to fetch IPFS CID {cid} from configured endpoint and fallbacks: {last_error}"
+        )
+        self._ipfs_cache[cid] = {}
+        return {}
 
     def _load_abi(self, filename: str) -> List[Dict[str, Any]]:
         abi_path = Path(__file__).parent.parent / "abi" / filename
+        if not abi_path.exists():
+            logger.warning(f"ABI file {filename} does not exist at {abi_path}.")
+            return []
         with open(abi_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _setup_contracts(self):
         mapping = [
             (
-                "CertificateCompetition",
-                settings.certificate_competition_contract,
-                "CertificateCompetition.json",
-            ),
-            (
                 "CompetitionManager",
-                settings.competition_contract,
+                settings.competition_contract
+                or settings.certificate_competition_contract,
                 "CompetitionManager.json",
-            ),
-            (
-                "TreasuryPlatform",
-                settings.treasury_platform_contract,
-                "TreasuryPlatform.json",
-            ),
-            (
-                "TreasuryPrize",
-                settings.treasury_prize_contract,
-                "TreasuryPrize.json",
-            ),
-            (
-                "ListingTokenPrize",
-                settings.listing_token_prize_contract,
-                "ListingTokenPrizeContract.json",
-            ),
-            (
-                "PriceCompetitionManager",
-                settings.price_competition_manager_contract,
-                "PriceCompetitionManager.json",
-            ),
-            (
-                "SignerManager",
-                settings.signer_manager_contract,
-                "SignerManager.json",
-            ),
-            (
-                "SignerManagerCertificate",
-                settings.signer_manager_certificate_contract,
-                "SignerManager.json",
-            ),
-            (
-                "CertificateManager",
-                settings.certificate_manager_contract,
-                "CertificateManager.json",
             ),
         ]
 
@@ -128,6 +154,11 @@ class Web3Indexer:
             try:
                 checksum_addr = AsyncWeb3.to_checksum_address(address.strip())
                 abi = self._load_abi(abi_file)
+                if not abi:
+                    logger.warning(
+                        f"ABI for contract {name} ({abi_file}) is empty or missing, skipping."
+                    )
+                    continue
                 contract = self.w3.eth.contract(address=checksum_addr, abi=abi)
 
                 topic_map = {}
@@ -274,7 +305,7 @@ class Web3Indexer:
             print(f"  Args:      {json.dumps(cleaned_args, indent=4)}")
             print("=" * 60)
 
-            self._print_event_details(event_name, cleaned_args, tx_hash)
+            await self._print_event_details(event_name, cleaned_args, tx_hash)
 
             if event_name == "CompetitionCreated":
                 await self._handle_competition_created(tx_hash, cleaned_args)
@@ -296,6 +327,14 @@ class Web3Indexer:
                 "PriceCompetitionFeeUpdated",
             ):
                 await self._handle_price_competition_fee_set(tx_hash, cleaned_args)
+            elif event_name == "CertificateParticipantMinted":
+                await self._handle_certificate_participant_minted(
+                    tx_hash, cleaned_args
+                )
+            elif event_name == "CertificateParticipantWinnerMinted":
+                await self._handle_certificate_participant_winner_minted(
+                    tx_hash, cleaned_args
+                )
 
         except Exception as e:
             logger.error(f"Error processing log {tx_hash}:{log_index}: {e}")
@@ -383,8 +422,18 @@ class Web3Indexer:
             )
             treasury_fee = int(args.get("treasuryFee") or 0)
             token_address = str(args.get("tokenAddress") or "")
-            title = str(args.get("title") or "")
-            description = str(args.get("description") or "")
+            cid = str(
+                args.get("cid") or args.get("title") or args.get("description") or ""
+            )
+
+            title = str(args.get("title") or cid or "")
+            description = str(args.get("description") or cid or "")
+
+            if cid:
+                fee_meta = await self._fetch_from_ipfs(cid)
+                if isinstance(fee_meta, dict):
+                    title = str(fee_meta.get("name") or fee_meta.get("title") or title)
+                    description = str(fee_meta.get("description") or description)
 
             saved = await PriceCompetitionDatabases.add_price_competition(
                 tx_hash=tx_hash,
@@ -431,8 +480,19 @@ class Web3Indexer:
             winner_id = int(args.get("winnerId") or 0)
             participant = str(args.get("participant") or "")
             competition_id = str(args.get("competitionId") or "")
-            participant_winner_id = int(args.get("participantWinnerId") or 0)
-            title = str(args.get("title") or "")
+            participant_winner_id = int(args.get("participantWinnerId") or winner_id)
+            certificate_cid = str(args.get("certificateCID") or args.get("title") or "")
+
+            title = str(args.get("title") or certificate_cid or "")
+            if certificate_cid:
+                cert_meta = await self._fetch_from_ipfs(certificate_cid)
+                if isinstance(cert_meta, dict):
+                    title = str(
+                        cert_meta.get("title")
+                        or cert_meta.get("name")
+                        or cert_meta.get("category")
+                        or title
+                    )
 
             saved = await ParticipantWinnerDatabases.add_participant_winner(
                 tx_hash=tx_hash,
@@ -448,6 +508,68 @@ class Web3Indexer:
         except Exception as e:
             logger.error(f"Failed to save WinnerSet event to DB: {e}")
 
+    async def _handle_certificate_participant_minted(
+        self, tx_hash: str, args: Dict[str, Any]
+    ):
+        try:
+            from app.databases.certificate_participant_minted import (
+                CertificateParticipantMintedDatabases,
+            )
+
+            token_id = int(args.get("tokenId") or 0)
+            participant = str(args.get("participant") or "")
+            competition_id = str(args.get("competitionId") or "")
+            uri = str(args.get("uri") or "")
+
+            saved = (
+                await CertificateParticipantMintedDatabases.add_certificate_participant_minted(
+                    tx_hash=tx_hash,
+                    token_id=token_id,
+                    participant=participant,
+                    competition_id=competition_id,
+                    uri=uri,
+                )
+            )
+            logger.info(
+                f"Successfully saved CertificateParticipantMinted to DB with ULID: {saved.id} (token_id: {token_id}, competition_id: {competition_id})"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to save CertificateParticipantMinted event to DB: {e}"
+            )
+
+    async def _handle_certificate_participant_winner_minted(
+        self, tx_hash: str, args: Dict[str, Any]
+    ):
+        try:
+            from app.databases.certificate_participant_winner_minted import (
+                CertificateParticipantWinnerMintedDatabases,
+            )
+
+            token_id = int(args.get("tokenId") or 0)
+            participant = str(args.get("participant") or "")
+            competition_id = str(args.get("competitionId") or "")
+            winner_id = int(args.get("winnerId") or 0)
+            uri = str(args.get("uri") or "")
+
+            saved = (
+                await CertificateParticipantWinnerMintedDatabases.add_certificate_participant_winner_minted(
+                    tx_hash=tx_hash,
+                    token_id=token_id,
+                    participant=participant,
+                    competition_id=competition_id,
+                    winner_id=winner_id,
+                    uri=uri,
+                )
+            )
+            logger.info(
+                f"Successfully saved CertificateParticipantWinnerMinted to DB with ULID: {saved.id} (token_id: {token_id}, winner_id: {winner_id}, competition_id: {competition_id})"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to save CertificateParticipantWinnerMinted event to DB: {e}"
+            )
+
     async def _handle_competition_created(self, tx_hash: str, args: Dict[str, Any]):
         try:
             from app.databases.competition import CompetitionDatabases
@@ -457,29 +579,68 @@ class Web3Indexer:
                 if isinstance(args.get("competition"), dict)
                 else {}
             )
+            comp_cid = str(comp.get("cid") or "")
+            certificate_cid = str(
+                comp.get("certificateCID") or comp.get("certificate_cid") or ""
+            )
+            formation = str(comp.get("formation") or "")
+            wallet_address = str(
+                args.get("organization") or comp.get("organization") or ""
+            )
+
+            ipfs_data = await self._fetch_from_ipfs(comp_cid) if comp_cid else {}
+
+            name = str(ipfs_data.get("name") or comp.get("name") or "")
+            category = str(ipfs_data.get("category") or comp.get("category") or "")
+            description = str(
+                ipfs_data.get("description") or comp.get("description") or ""
+            )
+            requirement = str(
+                ipfs_data.get("requirements")
+                or ipfs_data.get("requirement")
+                or comp.get("requirements")
+                or comp.get("requirement")
+                or ""
+            )
+            guidebook_cid = str(
+                ipfs_data.get("guideBookCID")
+                or ipfs_data.get("guideBookCid")
+                or ipfs_data.get("guidebook_cid")
+                or ipfs_data.get("guidebookCid")
+                or comp.get("guideBookCID")
+                or comp.get("cid")
+                or ""
+            )
+
             sched = (
-                comp.get("schedule") if isinstance(comp.get("schedule"), dict) else {}
-            )
-            winners = (
-                args.get("winners") if isinstance(args.get("winners"), list) else []
+                ipfs_data.get("schedule")
+                if isinstance(ipfs_data.get("schedule"), dict)
+                else (
+                    comp.get("schedule")
+                    if isinstance(comp.get("schedule"), dict)
+                    else ipfs_data
+                )
             )
 
-            wallet_address = args.get("organization") or comp.get("organization") or ""
-            name = comp.get("name", "")
-            category = comp.get("category", "")
-            description = comp.get("description", "")
-            requirement = comp.get("requirements") or comp.get("requirement") or ""
-            formation = comp.get("formation", "")
-            certificate_cid = comp.get("certificateCID", "")
-            guidebook_cid = comp.get("guideBookCID", "")
-
-            registration_window = _parse_timestamp(sched.get("registrationWindow"))
-            competition_window = _parse_timestamp(sched.get("competitionWindow"))
-            submission_deadline = _parse_timestamp(sched.get("submissionDeadline"))
-            judging_review = _parse_timestamp(sched.get("judgingReview"))
-            result_announcement = _parse_timestamp(sched.get("resultAnnouncement"))
+            registration_window = _parse_timestamp(
+                sched.get("registrationWindow") or sched.get("registration_window")
+            )
+            competition_window = _parse_timestamp(
+                sched.get("competitionWindow") or sched.get("competition_window")
+            )
+            submission_deadline = _parse_timestamp(
+                sched.get("submissionDeadline") or sched.get("submission_deadline")
+            )
+            judging_review = _parse_timestamp(
+                sched.get("judgingReview") or sched.get("judging_review")
+            )
+            result_announcement = _parse_timestamp(
+                sched.get("resultAnnouncement") or sched.get("result_announcement")
+            )
             pirze_certificate_claim = _parse_timestamp(
-                sched.get("prizeCertificateClaim")
+                comp.get("prizeCertificateClaim")
+                or sched.get("prizeCertificateClaim")
+                or sched.get("prize_certificate_claim")
             )
 
             raw_fee_id = args.get("priceCompetitionFeeId")
@@ -493,6 +654,49 @@ class Web3Indexer:
                 else (comp.get("id") if isinstance(comp, dict) else None)
             )
             competition_id = str(raw_comp_id or "")
+
+            raw_winners = (
+                args.get("winners") if isinstance(args.get("winners"), list) else []
+            )
+            ipfs_winners = (
+                ipfs_data.get("winners")
+                if isinstance(ipfs_data.get("winners"), list)
+                else []
+            )
+
+            winners = []
+            for i, w in enumerate(raw_winners):
+                if isinstance(w, dict):
+                    w_item = dict(w)
+                    meta_w = (
+                        ipfs_winners[i]
+                        if i < len(ipfs_winners) and isinstance(ipfs_winners[i], dict)
+                        else {}
+                    )
+                    w_title = (
+                        w_item.get("title")
+                        or meta_w.get("title")
+                        or meta_w.get("category")
+                    )
+                    w_cert_cid = (
+                        w_item.get("certificateCID")
+                        or w_item.get("certificate_cid")
+                        or meta_w.get("certificateCID")
+                        or meta_w.get("certificate_cid")
+                    )
+                    if not w_title and w_cert_cid:
+                        w_cert_meta = await self._fetch_from_ipfs(str(w_cert_cid))
+                        if isinstance(w_cert_meta, dict):
+                            w_title = (
+                                w_cert_meta.get("title")
+                                or w_cert_meta.get("name")
+                                or w_cert_meta.get("category")
+                            )
+                    w_item["title"] = str(
+                        w_title
+                        or f"Winner #{w_item.get('id') or w_item.get('winnerId') or (i + 1)}"
+                    )
+                    winners.append(w_item)
 
             saved_comp = await CompetitionDatabases.add_competition(
                 wallet_address=wallet_address,
@@ -522,15 +726,26 @@ class Web3Indexer:
                 f"Failed to save CompetitionCreated event to DB (tx: {tx_hash}): {e}"
             )
 
-    def _print_event_details(self, event_name: str, args: Dict[str, Any], tx_hash: str):
+    async def _print_event_details(
+        self, event_name: str, args: Dict[str, Any], tx_hash: str
+    ):
         if event_name == "CompetitionCreated":
             comp = (
                 args.get("competition")
                 if isinstance(args.get("competition"), dict)
                 else {}
             )
+            comp_cid = comp.get("cid") or ""
+            ipfs_data = await self._fetch_from_ipfs(comp_cid) if comp_cid else {}
+
             sched = (
-                comp.get("schedule") if isinstance(comp.get("schedule"), dict) else {}
+                ipfs_data.get("schedule")
+                if isinstance(ipfs_data.get("schedule"), dict)
+                else (
+                    comp.get("schedule")
+                    if isinstance(comp.get("schedule"), dict)
+                    else {}
+                )
             )
             winners = (
                 args.get("winners") if isinstance(args.get("winners"), list) else []
@@ -548,22 +763,42 @@ class Web3Indexer:
             )
             print(f"     Price Competition Fee ID:{args.get('priceCompetitionFeeId')}")
             print(f"     Token Address:           {token_addr}")
-            print(f"     Name:                    {comp.get('name')}")
-            print(f"     Category:                {comp.get('category')}")
-            print(f"     Description:             {comp.get('description')}")
-            print(f"     Requirements:            {comp.get('requirements') or comp.get('requirement')}")
+            print(
+                f"     Name:                    {ipfs_data.get('name') or comp.get('name')}"
+            )
+            print(
+                f"     Category:                {ipfs_data.get('category') or comp.get('category')}"
+            )
+            print(
+                f"     Description:             {ipfs_data.get('description') or comp.get('description')}"
+            )
+            print(
+                f"     Requirements:            {ipfs_data.get('requirements') or ipfs_data.get('requirement') or comp.get('requirements') or comp.get('requirement')}"
+            )
             print(f"     Formation:               {comp.get('formation')}")
             print(f"     Schedule:")
-            print(f"       Registration Window:   {sched.get('registrationWindow')}")
-            print(f"       Competition Window:    {sched.get('competitionWindow')}")
-            print(f"       Submission Deadline:   {sched.get('submissionDeadline')}")
-            print(f"       Judging Review:        {sched.get('judgingReview')}")
-            print(f"       Result Announcement:   {sched.get('resultAnnouncement')}")
             print(
-                f"       Prize Certificate Claim: {sched.get('prizeCertificateClaim')}"
+                f"       Registration Window:   {sched.get('registrationWindow') or sched.get('registration_window')}"
+            )
+            print(
+                f"       Competition Window:    {sched.get('competitionWindow') or sched.get('competition_window')}"
+            )
+            print(
+                f"       Submission Deadline:   {sched.get('submissionDeadline') or sched.get('submission_deadline')}"
+            )
+            print(
+                f"       Judging Review:        {sched.get('judgingReview') or sched.get('judging_review')}"
+            )
+            print(
+                f"       Result Announcement:   {sched.get('resultAnnouncement') or sched.get('result_announcement')}"
+            )
+            print(
+                f"       Prize Certificate Claim: {sched.get('prizeCertificateClaim') or comp.get('prizeCertificateClaim')}"
             )
             print(f"     Certificate CID:         {comp.get('certificateCID')}")
-            print(f"     Guidebook CID:           {comp.get('guideBookCID')}")
+            print(
+                f"     Guidebook CID:           {ipfs_data.get('guideBookCID') or comp.get('guideBookCID') or comp_cid}"
+            )
             if winners:
                 print(f"     Winners ({len(winners)}):")
                 for i, w in enumerate(winners, 1):
@@ -587,13 +822,25 @@ class Web3Indexer:
             print(f"     Amount:         {args.get('amount')}")
 
         elif event_name == "WinnerSet":
+            cert_cid = str(args.get("certificateCID") or args.get("title") or "")
+            title = str(args.get("title") or cert_cid or "")
+            if cert_cid:
+                cert_meta = await self._fetch_from_ipfs(cert_cid)
+                if isinstance(cert_meta, dict):
+                    title = str(
+                        cert_meta.get("title")
+                        or cert_meta.get("name")
+                        or cert_meta.get("category")
+                        or title
+                    )
+            participant_winner_id = args.get("participantWinnerId") or args.get("winnerId")
             print(f"  🥇 Winner Set:")
             print(f"     Tx Hash:               {tx_hash}")
             print(f"     Winner ID:             {args.get('winnerId')}")
             print(f"     Participant:           {args.get('participant')}")
             print(f"     Competition ID:        {args.get('competitionId')}")
-            print(f"     Participant Winner ID: {args.get('participantWinnerId')}")
-            print(f"     Title:                 {args.get('title')}")
+            print(f"     Participant Winner ID: {participant_winner_id}")
+            print(f"     Title:                 {title}")
 
         elif event_name == "ListingTokenPrizeAdded":
             print(f"  📌 ListingTokenPrize Added:")
@@ -609,23 +856,28 @@ class Web3Indexer:
             print(f"     Token Address: {args.get('tokenAddress')}")
             print(f"     Is Active:     {args.get('isActive')}")
 
-        elif event_name == "PriceCompetitionFeeSet":
-            print(f"  💰 Price Competition Fee Set:")
-            print(f"     Tx Hash:       {tx_hash}")
-            print(f"     ID:            {args.get('id')}")
-            print(f"     Treasury Fee:  {args.get('treasuryFee')}")
-            print(f"     Token Address: {args.get('tokenAddress')}")
-            print(f"     Title:         {args.get('title')}")
-            print(f"     Description:   {args.get('description')}")
+        elif event_name in (
+            "PriceCompetitionFeeSet",
+            "PriceCompetitionFeeUpdated",
+        ):
+            cid = str(
+                args.get("cid") or args.get("title") or args.get("description") or ""
+            )
+            title = args.get("title") or cid
+            description = args.get("description") or cid
+            if cid:
+                fee_meta = await self._fetch_from_ipfs(cid)
+                if isinstance(fee_meta, dict):
+                    title = fee_meta.get("name") or fee_meta.get("title") or title
+                    description = fee_meta.get("description") or description
 
-        elif event_name == "PriceCompetitionFeeUpdated":
-            print(f"  🔄 Price Competition Fee Updated:")
+            print(f"  💰 Price Competition Fee Set/Updated:")
             print(f"     Tx Hash:       {tx_hash}")
             print(f"     ID:            {args.get('id')}")
             print(f"     Treasury Fee:  {args.get('treasuryFee')}")
             print(f"     Token Address: {args.get('tokenAddress')}")
-            print(f"     Title:         {args.get('title')}")
-            print(f"     Description:   {args.get('description')}")
+            print(f"     Title:         {title}")
+            print(f"     Description:   {description}")
 
         elif event_name == "SignerAddressUpdated":
             print(f"  ✍️  Signer Address Updated:")

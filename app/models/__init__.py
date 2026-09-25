@@ -19,6 +19,8 @@ from .price_competition import PriceCompetitionModel
 from .competition_fee_paid import CompetitionFeePaidModel
 from .participant_winner import ParticipantWinnerModel
 from .prize_distributed import PrizeDistributedModel
+from .certificate_participant_minted import CertificateParticipantMintedModel
+from .certificate_participant_winner_minted import CertificateParticipantWinnerMintedModel
 from .indexer_state import IndexerStateModel
 
 __all__ = [
@@ -43,5 +45,7 @@ __all__ = [
     "CompetitionFeePaidModel",
     "ParticipantWinnerModel",
     "PrizeDistributedModel",
+    "CertificateParticipantMintedModel",
+    "CertificateParticipantWinnerMintedModel",
     "IndexerStateModel",
 ]

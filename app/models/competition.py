@@ -20,6 +20,12 @@ if TYPE_CHECKING:
     from app.models.competition_fee_paid import CompetitionFeePaidModel
     from app.models.participant_winner import ParticipantWinnerModel
     from app.models.prize_distributed import PrizeDistributedModel
+    from app.models.certificate_participant_minted import (
+        CertificateParticipantMintedModel,
+    )
+    from app.models.certificate_participant_winner_minted import (
+        CertificateParticipantWinnerMintedModel,
+    )
 
 
 class CompetitionModel(SQLModel, table=True):
@@ -104,3 +110,9 @@ class CompetitionModel(SQLModel, table=True):
     prize_distributions: List["PrizeDistributedModel"] = Relationship(
         back_populates="competition"
     )
+    certificate_participant_minted: List["CertificateParticipantMintedModel"] = (
+        Relationship(back_populates="competition")
+    )
+    certificate_participant_winner_minted: List[
+        "CertificateParticipantWinnerMintedModel"
+    ] = Relationship(back_populates="competition")
