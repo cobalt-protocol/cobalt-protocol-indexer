@@ -3,7 +3,7 @@ version: '3.8'
 services:
   kubo:
     image: ipfs/kubo:latest
-    container_name: kelola_limbah_kubo_staging
+    container_name: cobalt_protocol_kubo_dev
     restart: unless-stopped
     ports:
       - "${KUBO_SWARM_PORT:-4001}:4001"
@@ -13,8 +13,8 @@ services:
     environment:
       IPFS_PROFILE: server
     volumes:
-      - kubo_staging_data:/data/ipfs:U
-      - kubo_staging_export:/export:U
+      - kubo_dev_data:/data/ipfs:U
+      - kubo_dev_export:/export:U
       - ./kubo-init.sh:/container-init.d/01-bind-api.sh:ro
     networks:
       default:
@@ -28,6 +28,7 @@ services:
       start_period: 10s
 
 volumes:
-  kubo_staging_data:
-  kubo_staging_export:
+  kubo_dev_data:
+  kubo_dev_export:
+
 
