@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlalchemy import func
 
 from app.configs.database import AsyncSessionLocal
 from app.models.user import UserModel
@@ -92,7 +93,7 @@ class CompetitionDatabases:
     ) -> CompetitionModel:
         async def _impl(db: AsyncSession) -> CompetitionModel:
             statement = select(UserModel).where(
-                UserModel.wallet_address == wallet_address
+                func.lower(UserModel.wallet_address) == (wallet_address.lower() if wallet_address else "")
             )
             result = await db.exec(statement)
             user = result.first()
