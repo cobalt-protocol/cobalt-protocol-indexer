@@ -50,7 +50,7 @@ class UserModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    skill: Optional["SkillModel"] = Relationship(back_populates="user")
+    skills: List["SkillModel"] = Relationship(back_populates="user")
     skill_description: Optional["SkillDescriptionModel"] = Relationship(
         back_populates="user"
     )
