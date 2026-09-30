@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     stellar_contract_id: str | None = None
     stellar_rpc_urls: str = "https://soroban-testnet.stellar.org"
 
-    kubo_api_url: str = "http://kubo:5001"
+    kubo_api_url: str = "http://localhost:5001/api/v0/version"
     kubo_gateway_url: str = "http://localhost:8082"
 
     frontend_base_url: str = "http://localhost:3000"

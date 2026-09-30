@@ -81,7 +81,8 @@ class Web3Indexer:
             return self._ipfs_cache[cid]
 
         candidates = []
-        base_api = (settings.kubo_api_url or "http://localhost:5001").rstrip("/")
+        raw_api = settings.kubo_api_url or "http://localhost:5001"
+        base_api = raw_api.split("/api/v0")[0].rstrip("/")
         candidates.append(("POST", f"{base_api}/api/v0/cat?arg={cid}"))
 
         if "kubo" in base_api:
