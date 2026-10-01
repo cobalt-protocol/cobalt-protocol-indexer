@@ -6,17 +6,20 @@ from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 if TYPE_CHECKING:
-    from app.models.skill import SkillModel
-    from app.models.skill_description import SkillDescriptionModel
-    from app.models.social_media import SocialMediaModel
+    from app.models.skills_user import SkillUserModel
+    from app.models.skill_description_user import SkillDescriptionUserModel
+    from app.models.social_media_user import SocialMediaUserModel
     from app.models.organization import OrganizationModel
     from app.models.team import TeamModel
     from app.models.team_role import TeamRoleModel
     from app.models.winner import WinnerModel
     from app.models.nonce_connect import NonceConnectModel
-    from app.models.nonce_certificate_participant import NonceCertificateParticipantModel
+    from app.models.nonce_certificate_participant import (
+        NonceCertificateParticipantModel,
+    )
     from app.models.nonce_certificate_winner import NonceCertificateWinnerModel
     from app.models.competition import CompetitionModel
+    from app.models.request_join import RequestJoinModel
 
 
 class UserModel(SQLModel, table=True):
@@ -50,27 +53,21 @@ class UserModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    skills: List["SkillModel"] = Relationship(back_populates="user")
-    skill_description: Optional["SkillDescriptionModel"] = Relationship(
+    skills: List["SkillUserModel"] = Relationship(back_populates="user")
+    skill_description: Optional["SkillDescriptionUserModel"] = Relationship(
         back_populates="user"
     )
-    social_media: Optional["SocialMediaModel"] = Relationship(back_populates="user")
+    social_media: Optional["SocialMediaUserModel"] = Relationship(back_populates="user")
     organizations: List["OrganizationModel"] = Relationship(back_populates="user")
     teams: List["TeamModel"] = Relationship(back_populates="user")
     team_roles: List["TeamRoleModel"] = Relationship(back_populates="user")
+    request_joins: List["RequestJoinModel"] = Relationship(back_populates="user")
     winner: Optional["WinnerModel"] = Relationship(back_populates="user")
-    nonce_connect: Optional["NonceConnectModel"] = Relationship(
+    nonce_connect: Optional["NonceConnectModel"] = Relationship(back_populates="user")
+    nonce_certificate_participants: List["NonceCertificateParticipantModel"] = (
+        Relationship(back_populates="user")
+    )
+    nonce_certificate_winners: List["NonceCertificateWinnerModel"] = Relationship(
         back_populates="user"
     )
-    nonce_certificate_participants: List[
-        "NonceCertificateParticipantModel"
-    ] = Relationship(back_populates="user")
-    nonce_certificate_winners: List[
-        "NonceCertificateWinnerModel"
-    ] = Relationship(back_populates="user")
-    competitions: List["CompetitionModel"] = Relationship(
-        back_populates="user"
-    )
-
-
-
+    competitions: List["CompetitionModel"] = Relationship(back_populates="user")

@@ -6,15 +6,18 @@ from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 if TYPE_CHECKING:
-    from app.models.user import UserModel
+    from app.models.team import TeamModel
 
 
-class SkillDescriptionModel(SQLModel, table=True):
-    __tablename__ = "skill_description"
+class SubmissionProjectModel(SQLModel, table=True):
+    __tablename__ = "submission_project"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    description: str
-    user_id: str = Field(unique=True, foreign_key="users.id")
+    title: str
+    description: Optional[str] = None
+    submission_link: str
+    document_cid: str
+    team_id: str = Field(foreign_key="team.id", unique=True)
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -35,7 +38,4 @@ class SkillDescriptionModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    user: Optional["UserModel"] = Relationship(back_populates="skill_description")
-
-
-
+    team: Optional["TeamModel"] = Relationship(back_populates="submission_project")

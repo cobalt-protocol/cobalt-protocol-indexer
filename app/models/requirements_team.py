@@ -6,17 +6,15 @@ from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 if TYPE_CHECKING:
-    from app.models.user import UserModel
     from app.models.team import TeamModel
 
 
-class TeamRoleModel(SQLModel, table=True):
-    __tablename__ = "team_role"
+class RequirementsTeamModel(SQLModel, table=True):
+    __tablename__ = "requirements_team"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    role: str = Field(default="leader")
-    user_id: str = Field(foreign_key="users.id")
-    team_id: str = Field(foreign_key="team.id")
+    requirement: str
+    team_id: str = Field(unique=True, foreign_key="team.id")
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -37,8 +35,6 @@ class TeamRoleModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    user: Optional["UserModel"] = Relationship(back_populates="team_roles")
-    team: Optional["TeamModel"] = Relationship(back_populates="team_roles")
-
-
-
+    team: Optional["TeamModel"] = Relationship(
+        back_populates="requirements_team"
+    )

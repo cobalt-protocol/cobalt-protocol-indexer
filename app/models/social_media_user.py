@@ -6,15 +6,16 @@ from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 if TYPE_CHECKING:
-    from app.models.team import TeamModel
+    from app.models.user import UserModel
 
 
-class SkillsSuggestionModel(SQLModel, table=True):
-    __tablename__ = "skills_suggestion"
+class SocialMediaUserModel(SQLModel, table=True):
+    __tablename__ = "social_media_user"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    name: str
-    team_id: str = Field(foreign_key="team.id")
+    github_link: str
+    linkedin_link: str
+    user_id: str = Field(unique=True, foreign_key="users.id")
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -35,9 +36,4 @@ class SkillsSuggestionModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    team: Optional["TeamModel"] = Relationship(
-        back_populates="skills_suggestions"
-    )
-
-
-
+    user: Optional["UserModel"] = Relationship(back_populates="social_media")

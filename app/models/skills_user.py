@@ -9,11 +9,9 @@ if TYPE_CHECKING:
     from app.models.user import UserModel
 
 
-class SkillModel(SQLModel, table=True):
-    __tablename__ = "skills"
-    __table_args__ = (
-        UniqueConstraint("user_id", "skill_name"),
-    )
+class SkillUserModel(SQLModel, table=True):
+    __tablename__ = "skills_user"
+    __table_args__ = (UniqueConstraint("user_id", "skill_name"),)
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     user_id: str = Field(foreign_key="users.id")
@@ -39,7 +37,3 @@ class SkillModel(SQLModel, table=True):
     )
 
     user: Optional["UserModel"] = Relationship(back_populates="skills")
-
-
-
-

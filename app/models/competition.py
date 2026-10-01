@@ -116,3 +116,4 @@ class CompetitionModel(SQLModel, table=True):
     certificate_participant_winner_minted: List[
         "CertificateParticipantWinnerMintedModel"
     ] = Relationship(back_populates="competition")
+
