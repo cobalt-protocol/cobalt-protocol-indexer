@@ -16,7 +16,7 @@ class RequestJoinModel(SQLModel, table=True):
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     status: str = Field(default="pending")
     user_id: str = Field(foreign_key="users.id")
-    team_id: str = Field(unique=True, foreign_key="team.id")
+    team_id: str = Field(foreign_key="team.id")
 
     created_at: Optional[datetime] = Field(
         default=None,

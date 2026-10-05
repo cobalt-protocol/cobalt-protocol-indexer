@@ -46,6 +46,19 @@ def _clean_args(args: Any) -> Any:
     return args
 
 
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+
+def _normalize_address(val: Any) -> Optional[str]:
+    """Kembalikan None jika alamat kosong atau zero address (default Solidity)."""
+    if val is None:
+        return None
+    addr = str(val).strip()
+    if not addr or addr.lower() == ZERO_ADDRESS:
+        return None
+    return addr
+
+
 def _parse_timestamp(val: Any) -> datetime:
     if isinstance(val, (int, float)):
         return datetime.fromtimestamp(val, tz=timezone.utc)
@@ -308,17 +321,21 @@ class Web3Indexer:
 
             await self._print_event_details(event_name, cleaned_args, tx_hash)
 
-            if event_name == "CompetitionCreated":
-                await self._handle_competition_created(tx_hash, cleaned_args)
+            if event_name in (
+                "CompetitionCreated",
+                "CompetitionPaymentConfigured",
+                "CompetitionWinnerConfigured",
+            ):
+                await self._handle_competition_event(event_name, tx_hash, cleaned_args)
             elif event_name == "CompetitionFeePaid":
                 await self._handle_competition_fee_paid(tx_hash, cleaned_args)
             elif event_name == "WinnerSet":
                 await self._handle_winner_set(tx_hash, cleaned_args)
             elif event_name in (
-                "ListingTokenPrizeAdded",
-                "ListingTokenPrizeDeactivated",
+                "ListingTokenAdded",
+                "ListingTokenDeactivated",
             ):
-                await self._handle_listing_token_prize_added(tx_hash, cleaned_args)
+                await self._handle_listing_token_added(tx_hash, cleaned_args)
             elif event_name == "PrizeDeposited":
                 await self._handle_prize_deposited(tx_hash, cleaned_args)
             elif event_name == "PrizeDistributed":
@@ -340,27 +357,27 @@ class Web3Indexer:
         except Exception as e:
             logger.error(f"Error processing log {tx_hash}:{log_index}: {e}")
 
-    async def _handle_listing_token_prize_added(
+    async def _handle_listing_token_added(
         self, tx_hash: str, args: Dict[str, Any]
     ):
         try:
-            from app.databases.listing_token_prize import ListingTokenPrizeDatabases
+            from app.databases.listing_token import ListingTokenDatabases
 
-            listing_token_prize_id = int(args.get("listingTokenPrizeId") or 0)
+            listing_token_id = int(args.get("listingTokenId") or 0)
             token_address = str(args.get("tokenAddress") or "")
             is_active = bool(args.get("isActive", True))
 
-            saved = await ListingTokenPrizeDatabases.add_listing_token_prize(
+            saved = await ListingTokenDatabases.add_listing_token(
                 tx_hash=tx_hash,
-                listing_token_prize_id=listing_token_prize_id,
+                listing_token_id=listing_token_id,
                 token_address=token_address,
                 is_active=is_active,
             )
             logger.info(
-                f"Successfully saved ListingTokenPrize to DB with ULID: {saved.id} (listing_token_prize_id: {listing_token_prize_id})"
+                f"Successfully saved ListingToken to DB with ULID: {saved.id} (listing_token_id: {listing_token_id})"
             )
         except Exception as e:
-            logger.error(f"Failed to save ListingTokenPrize event to DB: {e}")
+            logger.error(f"Failed to save ListingToken event to DB: {e}")
 
     async def _handle_prize_deposited(self, tx_hash: str, args: Dict[str, Any]):
         try:
@@ -481,10 +498,10 @@ class Web3Indexer:
             winner_id = int(args.get("winnerId") or 0)
             participant = str(args.get("participant") or "")
             competition_id = str(args.get("competitionId") or "")
-            participant_winner_id = int(args.get("participantWinnerId") or winner_id)
-            certificate_cid = str(args.get("certificateCID") or args.get("title") or "")
+            participant_winner_id = winner_id
+            certificate_cid = str(args.get("certificateCID") or "")
 
-            title = str(args.get("title") or certificate_cid or "")
+            title = certificate_cid
             if certificate_cid:
                 cert_meta = await self._fetch_from_ipfs(certificate_cid)
                 if isinstance(cert_meta, dict):
@@ -571,15 +588,74 @@ class Web3Indexer:
                 f"Failed to save CertificateParticipantWinnerMinted event to DB: {e}"
             )
 
-    async def _handle_competition_created(self, tx_hash: str, args: Dict[str, Any]):
+    async def _handle_competition_event(
+        self, event_name: str, tx_hash: str, args: Dict[str, Any]
+    ):
         try:
             from app.databases.competition import CompetitionDatabases
 
-            comp = (
-                args.get("competition")
-                if isinstance(args.get("competition"), dict)
-                else {}
-            )
+            if event_name == "CompetitionPaymentConfigured":
+                raw_comp_id = args.get("competitionId")
+                competition_id = (
+                    str(raw_comp_id) if raw_comp_id is not None else ""
+                )
+                fee_token_address = _normalize_address(args.get("tokenAddress"))
+                raw_fee = args.get("fee")
+                fee = int(raw_fee) if raw_fee is not None else None
+                # Payment tidak dikonfigurasi (zero address + fee 0) -> biarkan kosong
+                if fee_token_address is None and not fee:
+                    fee = None
+
+                await CompetitionDatabases.update_competition_payment(
+                    competition_id=competition_id,
+                    fee_token_address=fee_token_address,
+                    fee=fee,
+                    tx_hash=tx_hash,
+                )
+                logger.info(
+                    f"Successfully saved CompetitionPaymentConfigured to DB (competition_id: {competition_id}, fee_token_address: {fee_token_address}, fee: {fee})"
+                )
+                return
+
+            if event_name == "CompetitionWinnerConfigured":
+                raw_comp_id = args.get("competitionId")
+                competition_id = (
+                    str(raw_comp_id) if raw_comp_id is not None else ""
+                )
+                raw_winner_id = args.get("winnerId")
+                winner_id = int(raw_winner_id) if raw_winner_id is not None else 0
+                prize_token = str(args.get("prizeToken") or "")
+                raw_amount = args.get("prizeAmount")
+                prize_amount = int(raw_amount) if raw_amount is not None else 0
+                certificate_cid = str(args.get("certificateCID") or "")
+
+                category = ""
+                if certificate_cid:
+                    cert_meta = await self._fetch_from_ipfs(certificate_cid)
+                    if isinstance(cert_meta, dict):
+                        category = str(
+                            cert_meta.get("title")
+                            or cert_meta.get("name")
+                            or cert_meta.get("category")
+                            or ""
+                        )
+
+                await CompetitionDatabases.configure_competition_winner(
+                    competition_id=competition_id,
+                    winner_id=winner_id,
+                    prize_amount=prize_amount,
+                    certificate_cid=certificate_cid,
+                    category=category,
+                    tx_hash=tx_hash,
+                )
+                logger.info(
+                    f"Successfully saved CompetitionWinnerConfigured to DB (competition_id: {competition_id}, winner_id: {winner_id}, prize_token: {prize_token}, prize_amount: {prize_amount})"
+                )
+                return
+
+            # CompetitionCreated adalah event datar (flat): semua field berada
+            # di level atas `args`, bukan nested di objek "competition".
+            comp = args
             comp_cid = str(comp.get("cid") or "")
             certificate_cid = str(
                 comp.get("certificateCID") or comp.get("certificate_cid") or ""
@@ -644,6 +720,17 @@ class Web3Indexer:
                 or sched.get("prize_certificate_claim")
             )
 
+            payment = (
+                comp.get("payment")
+                if isinstance(comp.get("payment"), dict)
+                else {}
+            )
+            fee_token_address = _normalize_address(payment.get("tokenAddress"))
+            raw_fee = payment.get("fee")
+            fee = int(raw_fee) if raw_fee is not None else None
+            if fee_token_address is None and not fee:
+                fee = None
+
             raw_fee_id = args.get("priceCompetitionFeeId")
             price_competition_fee_id = (
                 int(raw_fee_id) if raw_fee_id is not None else None
@@ -664,6 +751,22 @@ class Web3Indexer:
                 if isinstance(ipfs_data.get("winners"), list)
                 else []
             )
+
+            # Event CompetitionCreated tidak membawa daftar winners (winner
+            # dikonfigurasi lewat CompetitionWinnerConfigured yang di-emit
+            # lebih dulu). Gunakan winners dari metadata IPFS agar title
+            # (mis. "1st Place") bisa diterapkan ke baris winner yang sudah
+            # ada, dicocokkan berdasarkan urutan.
+            if not raw_winners and ipfs_winners:
+                raw_winners = [
+                    {
+                        "title": w.get("title"),
+                        "certificateCID": w.get("certificateCID"),
+                        "_from_metadata": True,
+                    }
+                    for w in ipfs_winners
+                    if isinstance(w, dict)
+                ]
 
             winners = []
             for i, w in enumerate(raw_winners):
@@ -716,6 +819,8 @@ class Web3Indexer:
                 certificate_cid=certificate_cid,
                 guidebook_cid=guidebook_cid,
                 competition_id=competition_id,
+                fee=fee,
+                fee_token_address=fee_token_address,
                 price_competition_fee_id=price_competition_fee_id,
                 winners=winners,
             )
@@ -724,95 +829,101 @@ class Web3Indexer:
             )
         except Exception as e:
             logger.error(
-                f"Failed to save CompetitionCreated event to DB (tx: {tx_hash}): {e}"
+                f"Failed to save {event_name} event to DB (tx: {tx_hash}): {e}"
             )
 
     async def _print_event_details(
         self, event_name: str, args: Dict[str, Any], tx_hash: str
     ):
-        if event_name == "CompetitionCreated":
-            comp = (
-                args.get("competition")
-                if isinstance(args.get("competition"), dict)
-                else {}
-            )
+        if event_name in (
+            "CompetitionCreated",
+            "CompetitionPaymentConfigured",
+            "CompetitionWinnerConfigured",
+        ):
+            # CompetitionCreated adalah event datar (flat): semua field berada
+            # di level atas `args`, bukan nested di objek "competition".
+            comp = args
             comp_cid = comp.get("cid") or ""
             ipfs_data = await self._fetch_from_ipfs(comp_cid) if comp_cid else {}
 
-            sched = (
-                ipfs_data.get("schedule")
-                if isinstance(ipfs_data.get("schedule"), dict)
-                else (
-                    comp.get("schedule")
-                    if isinstance(comp.get("schedule"), dict)
+            competition_id = (
+                args.get("competitionId")
+                or args.get("id")
+                or comp.get("id")
+            )
+            print(f"  🏆 Competition Event ({event_name}):")
+            print(f"     Tx Hash:        {tx_hash}")
+            print(f"     Competition ID: {competition_id}")
+
+            if event_name == "CompetitionCreated":
+                sched = (
+                    ipfs_data.get("schedule")
+                    if isinstance(ipfs_data.get("schedule"), dict)
+                    else (
+                        comp.get("schedule")
+                        if isinstance(comp.get("schedule"), dict)
+                        else {}
+                    )
+                )
+                payment = (
+                    comp.get("payment")
+                    if isinstance(comp.get("payment"), dict)
                     else {}
                 )
-            )
-            winners = (
-                args.get("winners") if isinstance(args.get("winners"), list) else []
-            )
-            token_addr = ""
-            if winners and isinstance(winners[0], dict):
-                token_addr = str(
-                    winners[0].get("prizeToken") or winners[0].get("prize_token") or ""
+                print(
+                    f"     Creator Wallet (Org):    {args.get('organization') or comp.get('organization')}"
                 )
-            print(f"  🏆 Competition Created:")
-            print(f"     Tx Hash:                 {tx_hash}")
-            print(f"     ID:                      {args.get('id') or comp.get('id')}")
-            print(
-                f"     Creator Wallet (Org):    {args.get('organization') or comp.get('organization')}"
-            )
-            print(f"     Price Competition Fee ID:{args.get('priceCompetitionFeeId')}")
-            print(f"     Token Address:           {token_addr}")
-            print(
-                f"     Name:                    {ipfs_data.get('name') or comp.get('name')}"
-            )
-            print(
-                f"     Category:                {ipfs_data.get('category') or comp.get('category')}"
-            )
-            print(
-                f"     Description:             {ipfs_data.get('description') or comp.get('description')}"
-            )
-            print(
-                f"     Requirements:            {ipfs_data.get('requirements') or ipfs_data.get('requirement') or comp.get('requirements') or comp.get('requirement')}"
-            )
-            print(f"     Formation:               {comp.get('formation')}")
-            print(f"     Schedule:")
-            print(
-                f"       Registration Window:   {sched.get('registrationWindow') or sched.get('registration_window')}"
-            )
-            print(
-                f"       Competition Window:    {sched.get('competitionWindow') or sched.get('competition_window')}"
-            )
-            print(
-                f"       Submission Deadline:   {sched.get('submissionDeadline') or sched.get('submission_deadline')}"
-            )
-            print(
-                f"       Judging Review:        {sched.get('judgingReview') or sched.get('judging_review')}"
-            )
-            print(
-                f"       Result Announcement:   {sched.get('resultAnnouncement') or sched.get('result_announcement')}"
-            )
-            print(
-                f"       Prize Certificate Claim: {sched.get('prizeCertificateClaim') or comp.get('prizeCertificateClaim')}"
-            )
-            print(f"     Certificate CID:         {comp.get('certificateCID')}")
-            print(
-                f"     Guidebook CID:           {ipfs_data.get('guideBookCID') or comp.get('guideBookCID') or comp_cid}"
-            )
-            if winners:
-                print(f"     Winners ({len(winners)}):")
-                for i, w in enumerate(winners, 1):
-                    if isinstance(w, dict):
-                        print(f"       - Winner #{i}:")
-                        print(
-                            f"           Winner ID:       {w.get('id') or w.get('winnerId')}"
-                        )
-                        print(f"           Competition ID:  {w.get('competitionId')}")
-                        print(f"           Title:           {w.get('title')}")
-                        print(f"           Prize Token:     {w.get('prizeToken')}")
-                        print(f"           Prize Amount:    {w.get('prizeAmount')}")
-                        print(f"           Certificate CID: {w.get('certificateCID')}")
+                print(f"     Price Competition Fee ID:{args.get('priceCompetitionFeeId')}")
+                print(f"     Payment Token Address:   {payment.get('tokenAddress')}")
+                print(f"     Payment Fee:             {payment.get('fee')}")
+                print(f"     Competition CID:         {comp_cid}")
+                print(
+                    f"     Name:                    {ipfs_data.get('name') or comp.get('name')}"
+                )
+                print(
+                    f"     Category:                {ipfs_data.get('category') or comp.get('category')}"
+                )
+                print(
+                    f"     Description:             {ipfs_data.get('description') or comp.get('description')}"
+                )
+                print(
+                    f"     Requirements:            {ipfs_data.get('requirements') or ipfs_data.get('requirement') or comp.get('requirements') or comp.get('requirement')}"
+                )
+                print(f"     Formation:               {comp.get('formation')}")
+                print(f"     Schedule:")
+                print(
+                    f"       Registration Window:   {sched.get('registrationWindow') or sched.get('registration_window')}"
+                )
+                print(
+                    f"       Competition Window:    {sched.get('competitionWindow') or sched.get('competition_window')}"
+                )
+                print(
+                    f"       Submission Deadline:   {sched.get('submissionDeadline') or sched.get('submission_deadline')}"
+                )
+                print(
+                    f"       Judging Review:        {sched.get('judgingReview') or sched.get('judging_review')}"
+                )
+                print(
+                    f"       Result Announcement:   {sched.get('resultAnnouncement') or sched.get('result_announcement')}"
+                )
+                print(
+                    f"       Prize Certificate Claim: {sched.get('prizeCertificateClaim') or comp.get('prizeCertificateClaim')}"
+                )
+                print(f"     Certificate CID:         {comp.get('certificateCID')}")
+                print(
+                    f"     Guidebook CID:           {ipfs_data.get('guideBookCID') or comp.get('guideBookCID') or comp_cid}"
+                )
+
+            elif event_name == "CompetitionPaymentConfigured":
+                print(f"     Token Address:  {args.get('tokenAddress')}")
+                print(f"     Fee:            {args.get('fee')}")
+
+            elif event_name == "CompetitionWinnerConfigured":
+                print(f"     Winner ID:       {args.get('winnerId')}")
+                print(f"     Prize Token:     {args.get('prizeToken')}")
+                print(f"     Prize Amount:    {args.get('prizeAmount')}")
+                print(f"     Certificate CID: {args.get('certificateCID')}")
+                print(f"     Team ID:         {args.get('teamId')}")
 
         elif event_name == "CompetitionFeePaid":
             print(f"  💳 Competition Fee Paid:")
@@ -823,8 +934,8 @@ class Web3Indexer:
             print(f"     Amount:         {args.get('amount')}")
 
         elif event_name == "WinnerSet":
-            cert_cid = str(args.get("certificateCID") or args.get("title") or "")
-            title = str(args.get("title") or cert_cid or "")
+            cert_cid = str(args.get("certificateCID") or "")
+            title = cert_cid
             if cert_cid:
                 cert_meta = await self._fetch_from_ipfs(cert_cid)
                 if isinstance(cert_meta, dict):
@@ -834,7 +945,7 @@ class Web3Indexer:
                         or cert_meta.get("category")
                         or title
                     )
-            participant_winner_id = args.get("participantWinnerId") or args.get("winnerId")
+            participant_winner_id = args.get("winnerId")
             print(f"  🥇 Winner Set:")
             print(f"     Tx Hash:               {tx_hash}")
             print(f"     Winner ID:             {args.get('winnerId')}")
@@ -843,17 +954,17 @@ class Web3Indexer:
             print(f"     Participant Winner ID: {participant_winner_id}")
             print(f"     Title:                 {title}")
 
-        elif event_name == "ListingTokenPrizeAdded":
-            print(f"  📌 ListingTokenPrize Added:")
+        elif event_name == "ListingTokenAdded":
+            print(f"  📌 ListingToken Added:")
             print(f"     Tx Hash:       {tx_hash}")
-            print(f"     ID:            {args.get('listingTokenPrizeId')}")
+            print(f"     ID:            {args.get('listingTokenId')}")
             print(f"     Token Address: {args.get('tokenAddress')}")
             print(f"     Is Active:     {args.get('isActive')}")
 
-        elif event_name == "ListingTokenPrizeDeactivated":
-            print(f"  ❌ ListingTokenPrize Deactivated:")
+        elif event_name == "ListingTokenDeactivated":
+            print(f"  ❌ ListingToken Deactivated:")
             print(f"     Tx Hash:       {tx_hash}")
-            print(f"     ID:            {args.get('listingTokenPrizeId')}")
+            print(f"     ID:            {args.get('listingTokenId')}")
             print(f"     Token Address: {args.get('tokenAddress')}")
             print(f"     Is Active:     {args.get('isActive')}")
 
@@ -916,27 +1027,14 @@ class Web3Indexer:
             print(f"     Sender:  {args.get('sender')}")
             print(f"     Amount:  {args.get('amount')}")
 
-        elif event_name == "CertificateParticipantAdded":
-            print(f"  📜 Certificate Participant Added:")
-            print(f"     Tx Hash:        {tx_hash}")
-            print(f"     ID:             {args.get('id')}")
-            print(f"     Competition ID: {args.get('competitionId')}")
-            print(f"     Participant:    {args.get('participant')}")
-
-        elif event_name == "CertificateParticipantWinnerAdded":
-            print(f"  🏅 Certificate Participant Winner Added:")
-            print(f"     Tx Hash:        {tx_hash}")
-            print(f"     ID:             {args.get('id')}")
-            print(f"     Competition ID: {args.get('competitionId')}")
-            print(f"     Participant:    {args.get('participant')}")
-            print(f"     Winner ID:      {args.get('winnerId')}")
-
         elif event_name == "CertificateParticipantMinted":
             print(f"  🎖️  Certificate Participant Minted:")
             print(f"     Tx Hash:        {tx_hash}")
             print(f"     Token ID:       {args.get('tokenId')}")
             print(f"     Participant:    {args.get('participant')}")
             print(f"     Competition ID: {args.get('competitionId')}")
+            print(f"     Team ID:        {args.get('teamId')}")
+            print(f"     Signature:      {args.get('signature')}")
             print(f"     URI:            {args.get('uri')}")
 
         elif event_name == "CertificateParticipantWinnerMinted":
@@ -946,7 +1044,19 @@ class Web3Indexer:
             print(f"     Participant:    {args.get('participant')}")
             print(f"     Competition ID: {args.get('competitionId')}")
             print(f"     Winner ID:      {args.get('winnerId')}")
+            print(f"     Team ID:        {args.get('teamId')}")
+            print(f"     Signature:      {args.get('signature')}")
             print(f"     URI:            {args.get('uri')}")
+
+        elif event_name == "TeamPaymentCreated":
+            print(f"  💸 Team Payment Created:")
+            print(f"     Tx Hash:        {tx_hash}")
+            print(f"     Competition ID: {args.get('competitionId')}")
+            print(f"     CID:            {args.get('cid')}")
+            print(f"     Token:          {args.get('token')}")
+            print(f"     From:           {args.get('from')}")
+            print(f"     To:             {args.get('to')}")
+            print(f"     Amount:         {args.get('amount')}")
 
         print()
 

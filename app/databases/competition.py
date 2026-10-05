@@ -59,7 +59,6 @@ class CompetitionDatabases:
             "pirze_certificate_claim": now,
             "certificate_cid": "",
             "guidebook_cid": "",
-            "token_address": "",
             "competition_id": competition_id,
         }
 
@@ -86,6 +85,8 @@ class CompetitionDatabases:
         certificate_cid: str,
         guidebook_cid: str,
         competition_id: str,
+        fee: Optional[int] = None,
+        fee_token_address: Optional[str] = None,
         formation: str = "",
         price_competition_fee_id: Optional[int] = None,
         winners: Optional[List[Dict[str, Any]]] = None,
@@ -119,7 +120,15 @@ class CompetitionDatabases:
                 await db.commit()
                 await db.refresh(organization)
 
-            token_address = ""
+            # Jangan assign ulang `fee_token_address` di dalam closure ini:
+            # Python akan menganggapnya variabel lokal _impl sehingga memicu
+            # UnboundLocalError. Gunakan nama lokal terpisah.
+            # Catatan: fee_token_address = token pembayaran tim
+            # (Competitions.payment.tokenAddress), BUKAN token platform fee
+            # (PriceCompetitionFee.tokenAddress), jadi tidak ada fallback ke
+            # price_comp.token_address. Nilainya diisi oleh event
+            # CompetitionPaymentConfigured (emit sebelum CompetitionCreated).
+            resolved_fee_token_address = fee_token_address or ""
             price_competition_id = None
             if price_competition_fee_id is not None:
                 price_comp_stmt = select(PriceCompetitionModel).where(
@@ -130,8 +139,6 @@ class CompetitionDatabases:
                 price_comp = price_comp_result.first()
                 if price_comp:
                     price_competition_id = price_comp.id
-                    if price_comp.token_address:
-                        token_address = price_comp.token_address
 
             existing = None
             if tx_hash:
@@ -165,8 +172,10 @@ class CompetitionDatabases:
                 existing.pirze_certificate_claim = pirze_certificate_claim
                 existing.certificate_cid = certificate_cid
                 existing.guidebook_cid = guidebook_cid
-                if token_address:
-                    existing.token_address = token_address
+                if fee is not None:
+                    existing.fee = fee
+                if resolved_fee_token_address:
+                    existing.fee_token_address = resolved_fee_token_address
                 if price_competition_id is not None:
                     existing.price_competition_id = price_competition_id
                 if competition_id is not None:
@@ -193,7 +202,8 @@ class CompetitionDatabases:
                     "pirze_certificate_claim": pirze_certificate_claim,
                     "certificate_cid": certificate_cid,
                     "guidebook_cid": guidebook_cid,
-                    "token_address": token_address,
+                    "fee": fee,
+                    "fee_token_address": resolved_fee_token_address,
                     "price_competition_id": price_competition_id,
                     "competition_id": competition_id,
                 }
@@ -204,41 +214,76 @@ class CompetitionDatabases:
                 await db.refresh(competition)
 
             if winners:
-                for w in winners:
-                    if isinstance(w, dict):
-                        cat = str(w.get("title") or w.get("category") or "")
-                        amt = int(w.get("prizeAmount") or w.get("amount") or 0)
-                        cert = str(
-                            w.get("certificateCID") or w.get("certificate_cid") or ""
-                        )
-                        raw_w_id = (
-                            w.get("id")
-                            if w.get("id") is not None
-                            else w.get("winnerId")
-                        )
-                        w_id = int(raw_w_id) if raw_w_id is not None else 0
+                # Baris winner yang sudah dibuat oleh event
+                # CompetitionWinnerConfigured (urut sesuai winnerId on-chain).
+                ordered_stmt = (
+                    select(PrizeWinnerModel)
+                    .where(PrizeWinnerModel.competition_id == competition.id)
+                    .order_by(PrizeWinnerModel.winner_id)
+                )
+                ordered_existing = list((await db.exec(ordered_stmt)).all())
 
+                for idx, w in enumerate(winners):
+                    if not isinstance(w, dict):
+                        continue
+
+                    cat = str(w.get("title") or w.get("category") or "")
+                    cert = str(
+                        w.get("certificateCID") or w.get("certificate_cid") or ""
+                    )
+
+                    # Winner dari metadata IPFS: hanya bawa title/certificate,
+                    # prizeAmount di metadata dalam satuan token (bukan wei),
+                    # jadi jangan menimpa amount on-chain. Cocokkan per urutan.
+                    if w.get("_from_metadata"):
+                        if idx < len(ordered_existing):
+                            target = ordered_existing[idx]
+                            if cat:
+                                target.category = cat
+                            if cert and not target.certificate_cid:
+                                target.certificate_cid = cert
+                            db.add(target)
+                        continue
+
+                    amt = int(w.get("prizeAmount") or w.get("amount") or 0)
+                    raw_w_id = (
+                        w.get("id")
+                        if w.get("id") is not None
+                        else w.get("winnerId")
+                    )
+                    w_id = int(raw_w_id) if raw_w_id is not None else 0
+
+                    existing_pw = None
+                    if w_id:
+                        pw_stmt = select(PrizeWinnerModel).where(
+                            PrizeWinnerModel.competition_id == competition.id,
+                            PrizeWinnerModel.winner_id == w_id,
+                        )
+                        existing_pw = (await db.exec(pw_stmt)).first()
+                    if not existing_pw:
                         pw_stmt = select(PrizeWinnerModel).where(
                             PrizeWinnerModel.competition_id == competition.id,
                             PrizeWinnerModel.category == cat,
                         )
-                        pw_res = await db.exec(pw_stmt)
-                        existing_pw = pw_res.first()
-                        if existing_pw:
-                            existing_pw.amount = amt
-                            existing_pw.certificate_cid = cert
-                            if w_id is not None:
-                                existing_pw.winner_id = w_id
-                            db.add(existing_pw)
-                        else:
-                            prize_winner = PrizeWinnerModel(
-                                winner_id=w_id,
-                                category=cat,
-                                amount=amt,
-                                certificate_cid=cert,
-                                competition_id=competition.id,
-                            )
-                            db.add(prize_winner)
+                        existing_pw = (await db.exec(pw_stmt)).first()
+
+                    if existing_pw:
+                        existing_pw.amount = amt
+                        existing_pw.certificate_cid = cert
+                        if cat:
+                            existing_pw.category = cat
+                        if w_id:
+                            existing_pw.winner_id = w_id
+                        db.add(existing_pw)
+                    else:
+                        prize_winner = PrizeWinnerModel(
+                            winner_id=w_id,
+                            category=cat,
+                            amount=amt,
+                            certificate_cid=cert,
+                            competition_id=competition.id,
+                        )
+                        db.add(prize_winner)
                 await db.commit()
                 await db.refresh(competition)
 
@@ -249,3 +294,77 @@ class CompetitionDatabases:
         else:
             async with AsyncSessionLocal() as db:
                 return await _impl(db)
+
+    @staticmethod
+    async def update_competition_payment(
+        competition_id: str,
+        fee_token_address: Optional[str] = None,
+        fee: Optional[int] = None,
+        tx_hash: str = "",
+        session: Optional[AsyncSession] = None,
+    ) -> CompetitionModel:
+        async def _impl(db: AsyncSession) -> CompetitionModel:
+            comp = await CompetitionDatabases.ensure_competition_exists(
+                db, competition_id, tx_hash
+            )
+            if fee_token_address is not None:
+                comp.fee_token_address = fee_token_address
+            if fee is not None:
+                comp.fee = fee
+            db.add(comp)
+            await db.commit()
+            await db.refresh(comp)
+            return comp
+
+        if session is not None:
+            return await _impl(session)
+        async with AsyncSessionLocal() as db:
+            return await _impl(db)
+
+    @staticmethod
+    async def configure_competition_winner(
+        competition_id: str,
+        winner_id: int,
+        prize_amount: int = 0,
+        certificate_cid: str = "",
+        category: str = "",
+        tx_hash: str = "",
+        session: Optional[AsyncSession] = None,
+    ) -> PrizeWinnerModel:
+        async def _impl(db: AsyncSession) -> PrizeWinnerModel:
+            comp = await CompetitionDatabases.ensure_competition_exists(
+                db, competition_id, tx_hash
+            )
+
+            statement = select(PrizeWinnerModel).where(
+                PrizeWinnerModel.competition_id == comp.id,
+                PrizeWinnerModel.winner_id == winner_id,
+            )
+            result = await db.exec(statement)
+            prize_winner = result.first()
+
+            if prize_winner:
+                prize_winner.amount = prize_amount
+                if certificate_cid:
+                    prize_winner.certificate_cid = certificate_cid
+                if category:
+                    prize_winner.category = category
+                db.add(prize_winner)
+            else:
+                prize_winner = PrizeWinnerModel(
+                    winner_id=winner_id,
+                    category=category or f"Winner #{winner_id}",
+                    amount=prize_amount,
+                    certificate_cid=certificate_cid,
+                    competition_id=comp.id,
+                )
+                db.add(prize_winner)
+
+            await db.commit()
+            await db.refresh(prize_winner)
+            return prize_winner
+
+        if session is not None:
+            return await _impl(session)
+        async with AsyncSessionLocal() as db:
+            return await _impl(db)

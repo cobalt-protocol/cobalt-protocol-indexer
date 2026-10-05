@@ -3,21 +3,21 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.configs.database import AsyncSessionLocal
-from app.models.listing_token_prize import ListingTokenPrizeModel
+from app.models.listing_token import ListingTokenModel
 
 
-class ListingTokenPrizeDatabases:
+class ListingTokenDatabases:
     @staticmethod
-    async def add_listing_token_prize(
+    async def add_listing_token(
         tx_hash: str,
-        listing_token_prize_id: int,
+        listing_token_id: int,
         token_address: str,
         is_active: bool = True,
         session: Optional[AsyncSession] = None,
-    ) -> ListingTokenPrizeModel:
-        async def _impl(db: AsyncSession) -> ListingTokenPrizeModel:
-            statement = select(ListingTokenPrizeModel).where(
-                ListingTokenPrizeModel.listing_token_prize_id == listing_token_prize_id
+    ) -> ListingTokenModel:
+        async def _impl(db: AsyncSession) -> ListingTokenModel:
+            statement = select(ListingTokenModel).where(
+                ListingTokenModel.listing_token_id == listing_token_id
             )
             result = await db.exec(statement)
             existing = result.first()
@@ -31,16 +31,16 @@ class ListingTokenPrizeDatabases:
                 await db.refresh(existing)
                 return existing
 
-            token_prize = ListingTokenPrizeModel(
+            listing_token = ListingTokenModel(
                 tx_hash=tx_hash,
-                listing_token_prize_id=listing_token_prize_id,
+                listing_token_id=listing_token_id,
                 token_address=token_address,
                 is_active=is_active,
             )
-            db.add(token_prize)
+            db.add(listing_token)
             await db.commit()
-            await db.refresh(token_prize)
-            return token_prize
+            await db.refresh(listing_token)
+            return listing_token
 
         if session is not None:
             return await _impl(session)

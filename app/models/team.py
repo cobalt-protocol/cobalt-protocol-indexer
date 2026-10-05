@@ -14,6 +14,10 @@ if TYPE_CHECKING:
     from app.models.team_role import TeamRoleModel
     from app.models.request_join import RequestJoinModel
     from app.models.submission_project import SubmissionProjectModel
+    from app.models.signature_certificate_participant import (
+        SignatureCertificateParticipantModel,
+    )
+    from app.models.signature_certificate_winner import SignatureCertificateWinnerModel
 
 
 class TeamModel(SQLModel, table=True):
@@ -58,4 +62,10 @@ class TeamModel(SQLModel, table=True):
     team_roles: List["TeamRoleModel"] = Relationship(back_populates="team")
     submission_project: Optional["SubmissionProjectModel"] = Relationship(
         back_populates="team"
+    )
+    signature_certificate_participants: List["SignatureCertificateParticipantModel"] = (
+        Relationship(back_populates="team")
+    )
+    signature_certificate_winners: List["SignatureCertificateWinnerModel"] = (
+        Relationship(back_populates="team")
     )

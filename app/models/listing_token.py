@@ -6,12 +6,12 @@ from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
 
-class ListingTokenPrizeModel(SQLModel, table=True):
-    __tablename__ = "listing_token_prize"
+class ListingTokenModel(SQLModel, table=True):
+    __tablename__ = "listing_token"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     tx_hash: str
-    listing_token_prize_id: int = Field(sa_type=BigInteger)
+    listing_token_id: int = Field(sa_type=BigInteger)
     token_address: str
     is_active: bool = Field(default=True)
     created_at: Optional[datetime] = Field(

@@ -14,10 +14,10 @@ if TYPE_CHECKING:
     from app.models.team_role import TeamRoleModel
     from app.models.winner import WinnerModel
     from app.models.nonce_connect import NonceConnectModel
-    from app.models.nonce_certificate_participant import (
-        NonceCertificateParticipantModel,
+    from app.models.signature_certificate_participant import (
+        SignatureCertificateParticipantModel,
     )
-    from app.models.nonce_certificate_winner import NonceCertificateWinnerModel
+    from app.models.signature_certificate_winner import SignatureCertificateWinnerModel
     from app.models.competition import CompetitionModel
     from app.models.request_join import RequestJoinModel
 
@@ -64,10 +64,10 @@ class UserModel(SQLModel, table=True):
     request_joins: List["RequestJoinModel"] = Relationship(back_populates="user")
     winner: Optional["WinnerModel"] = Relationship(back_populates="user")
     nonce_connect: Optional["NonceConnectModel"] = Relationship(back_populates="user")
-    nonce_certificate_participants: List["NonceCertificateParticipantModel"] = (
+    signature_certificate_participants: List["SignatureCertificateParticipantModel"] = (
         Relationship(back_populates="user")
     )
-    nonce_certificate_winners: List["NonceCertificateWinnerModel"] = Relationship(
+    signature_certificate_winners: List["SignatureCertificateWinnerModel"] = Relationship(
         back_populates="user"
     )
     competitions: List["CompetitionModel"] = Relationship(back_populates="user")

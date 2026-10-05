@@ -8,16 +8,18 @@ from app.utils import generate_ulid
 if TYPE_CHECKING:
     from app.models.user import UserModel
     from app.models.competition import CompetitionModel
+    from app.models.team import TeamModel
 
 
-class NonceCertificateParticipantModel(SQLModel, table=True):
-    __tablename__ = "nonce_certificate_participant"
+class SignatureCertificateParticipantModel(SQLModel, table=True):
+    __tablename__ = "signature_certificate_participant"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    nonce: str = Field(unique=True)
+    signature: str = Field()
 
     user_id: str = Field(foreign_key="users.id")
     competition_id: str = Field(foreign_key="competition.id")
+    team_id: str = Field(foreign_key="team.id")
 
     created_at: Optional[datetime] = Field(
         default=None,
@@ -40,8 +42,11 @@ class NonceCertificateParticipantModel(SQLModel, table=True):
     )
 
     user: Optional["UserModel"] = Relationship(
-        back_populates="nonce_certificate_participants"
+        back_populates="signature_certificate_participants"
     )
     competition: Optional["CompetitionModel"] = Relationship(
-        back_populates="nonce_certificate_participant"
+        back_populates="signature_certificate_participants"
+    )
+    team: Optional["TeamModel"] = Relationship(
+        back_populates="signature_certificate_participants"
     )

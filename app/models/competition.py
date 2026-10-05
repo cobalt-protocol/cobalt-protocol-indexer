@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, Numeric
 from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
@@ -9,11 +9,11 @@ if TYPE_CHECKING:
     from app.models.user import UserModel
     from app.models.prize_winner import PrizeWinnerModel
     from app.models.team import TeamModel
-    from app.models.nonce_certificate_participant import (
-        NonceCertificateParticipantModel,
+    from app.models.signature_certificate_participant import (
+        SignatureCertificateParticipantModel,
     )
-    from app.models.nonce_certificate_winner import (
-        NonceCertificateWinnerModel,
+    from app.models.signature_certificate_winner import (
+        SignatureCertificateWinnerModel,
     )
     from app.models.prize_deposited import PrizeDepositedModel
     from app.models.price_competition import PriceCompetitionModel
@@ -58,7 +58,8 @@ class CompetitionModel(SQLModel, table=True):
     )
     certificate_cid: str
     guidebook_cid: str
-    token_address: str
+    fee: Optional[int] = Field(default=None, sa_type=Numeric(78, 0))
+    fee_token_address: Optional[str] = Field(default=None)
     user_id: Optional[str] = Field(
         default=None, foreign_key="users.id"
     )
@@ -89,11 +90,11 @@ class CompetitionModel(SQLModel, table=True):
     prize_winners: List["PrizeWinnerModel"] = Relationship(back_populates="competition")
     user: Optional["UserModel"] = Relationship(back_populates="competitions")
     teams: List["TeamModel"] = Relationship(back_populates="competition")
-    nonce_certificate_participant: Optional["NonceCertificateParticipantModel"] = (
+    signature_certificate_participants: List["SignatureCertificateParticipantModel"] = (
         Relationship(back_populates="competition")
     )
-    nonce_certificate_winner: Optional["NonceCertificateWinnerModel"] = Relationship(
-        back_populates="competition"
+    signature_certificate_winners: List["SignatureCertificateWinnerModel"] = (
+        Relationship(back_populates="competition")
     )
     prize_deposits: List["PrizeDepositedModel"] = Relationship(
         back_populates="competition"

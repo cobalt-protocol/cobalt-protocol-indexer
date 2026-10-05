@@ -13,9 +13,9 @@ from .team_code import TeamCodeModel
 from .team_role import TeamRoleModel
 from .winner import WinnerModel
 from .nonce_connect import NonceConnectModel
-from .nonce_certificate_participant import NonceCertificateParticipantModel
-from .nonce_certificate_winner import NonceCertificateWinnerModel
-from .listing_token_prize import ListingTokenPrizeModel
+from .signature_certificate_participant import SignatureCertificateParticipantModel
+from .signature_certificate_winner import SignatureCertificateWinnerModel
+from .listing_token import ListingTokenModel
 from .prize_deposited import PrizeDepositedModel
 from .price_competition import PriceCompetitionModel
 from .competition_fee_paid import CompetitionFeePaidModel
@@ -44,9 +44,9 @@ __all__ = [
     "TeamRoleModel",
     "WinnerModel",
     "NonceConnectModel",
-    "NonceCertificateParticipantModel",
-    "NonceCertificateWinnerModel",
-    "ListingTokenPrizeModel",
+    "SignatureCertificateParticipantModel",
+    "SignatureCertificateWinnerModel",
+    "ListingTokenModel",
     "PrizeDepositedModel",
     "PriceCompetitionModel",
     "CompetitionFeePaidModel",
