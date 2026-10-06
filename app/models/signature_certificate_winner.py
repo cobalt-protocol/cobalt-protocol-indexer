@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from app.models.user import UserModel
     from app.models.competition import CompetitionModel
     from app.models.team import TeamModel
+    from app.models.indexer_state import IndexerStateModel
 
 
 class SignatureCertificateWinnerModel(SQLModel, table=True):
@@ -20,6 +21,9 @@ class SignatureCertificateWinnerModel(SQLModel, table=True):
     user_id: str = Field(foreign_key="users.id")
     competition_id: str = Field(foreign_key="competition.id")
     team_id: str = Field(foreign_key="team.id")
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
 
     created_at: Optional[datetime] = Field(
         default=None,
@@ -48,5 +52,8 @@ class SignatureCertificateWinnerModel(SQLModel, table=True):
         back_populates="signature_certificate_winners"
     )
     team: Optional["TeamModel"] = Relationship(
+        back_populates="signature_certificate_winners"
+    )
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
         back_populates="signature_certificate_winners"
     )

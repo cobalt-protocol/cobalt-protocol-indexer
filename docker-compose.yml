@@ -1,6 +1,31 @@
 version: '3.8'
 
 services:
+  # Indexer API — port customizable via .env PORT / HOST or CLI --port/--host
+  # Example: PORT=9000 docker compose up  |  PORT=9000 python main.py  |  python main.py --port 9000
+  indexer-api:
+    image: python:3.11-slim
+    container_name: cobalt_protocol_indexer_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: ${HOST:-0.0.0.0}
+      PORT: ${PORT:-8000}
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    volumes:
+      - .:/app
+    working_dir: /app
+    depends_on:
+      kubo:
+        condition: service_healthy
+    command: >
+      bash -c "pip install -r requirements.txt && python main.py --host 0.0.0.0 --port $${PORT:-8000}"
+    networks:
+      default:
+        aliases:
+          - indexer-api
+
   kubo:
     image: ipfs/kubo:latest
     container_name: cobalt_protocol_kubo_dev

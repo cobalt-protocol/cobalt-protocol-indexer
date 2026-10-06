@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from app.models.certificate_participant_winner_minted import (
         CertificateParticipantWinnerMintedModel,
     )
+    from app.models.indexer_state import IndexerStateModel
 
 
 class CompetitionModel(SQLModel, table=True):
@@ -67,6 +68,9 @@ class CompetitionModel(SQLModel, table=True):
         default=None, foreign_key="price_competition.id"
     )
     competition_id: str
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -117,4 +121,7 @@ class CompetitionModel(SQLModel, table=True):
     certificate_participant_winner_minted: List[
         "CertificateParticipantWinnerMintedModel"
     ] = Relationship(back_populates="competition")
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
+        back_populates="competitions"
+    )
 

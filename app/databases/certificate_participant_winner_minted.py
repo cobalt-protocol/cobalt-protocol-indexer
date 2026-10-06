@@ -3,6 +3,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.configs.database import AsyncSessionLocal
+from app.configs import settings
 from app.models.certificate_participant_winner_minted import (
     CertificateParticipantWinnerMintedModel,
 )
@@ -18,15 +19,35 @@ class CertificateParticipantWinnerMintedDatabases:
         competition_id: str,
         winner_id: int,
         uri: str,
+        chain_id: Optional[int] = None,
+        indexer_state_id: Optional[str] = None,
+        contract_name: str = "CompetitionManager",
         session: Optional[AsyncSession] = None,
     ) -> CertificateParticipantWinnerMintedModel:
+        if chain_id is None and indexer_state_id is None:
+            chain_id = settings.chain_id
+
         async def _impl(db: AsyncSession) -> CertificateParticipantWinnerMintedModel:
+            if indexer_state_id is not None:
+                resolved_state_id = indexer_state_id
+            else:
+                from app.databases.indexer_state import IndexerStateDatabases
+
+                resolved_state_id = await IndexerStateDatabases.resolve_indexer_state_id(
+                    db, contract_name=contract_name, chain_id=chain_id
+                )
+
             comp = await CompetitionDatabases.ensure_competition_exists(
-                db, competition_id, tx_hash
+                db,
+                competition_id,
+                tx_hash,
+                chain_id=chain_id,
+                indexer_state_id=resolved_state_id,
             )
 
             statement = select(CertificateParticipantWinnerMintedModel).where(
-                CertificateParticipantWinnerMintedModel.token_id == token_id
+                CertificateParticipantWinnerMintedModel.token_id == token_id,
+                CertificateParticipantWinnerMintedModel.indexer_state_id == resolved_state_id,
             )
             result = await db.exec(statement)
             existing = result.first()
@@ -37,6 +58,7 @@ class CertificateParticipantWinnerMintedDatabases:
                 existing.competition_id = comp.id
                 existing.winner_id = winner_id
                 existing.uri = uri
+                existing.indexer_state_id = resolved_state_id
                 db.add(existing)
                 await db.commit()
                 await db.refresh(existing)
@@ -49,6 +71,7 @@ class CertificateParticipantWinnerMintedDatabases:
                 competition_id=comp.id,
                 winner_id=winner_id,
                 uri=uri,
+                indexer_state_id=resolved_state_id,
             )
             db.add(record)
             await db.commit()

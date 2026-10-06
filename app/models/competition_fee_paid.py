@@ -7,6 +7,7 @@ from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.competition import CompetitionModel
+    from app.models.indexer_state import IndexerStateModel
 
 
 class CompetitionFeePaidModel(SQLModel, table=True):
@@ -18,6 +19,9 @@ class CompetitionFeePaidModel(SQLModel, table=True):
     payer: str
     token_address: str
     amount: int = Field(sa_type=Numeric(78, 0))
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -40,4 +44,7 @@ class CompetitionFeePaidModel(SQLModel, table=True):
 
     competition: Optional["CompetitionModel"] = Relationship(
         back_populates="competition_fee_paid"
+    )
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
+        back_populates="competition_fee_paids"
     )

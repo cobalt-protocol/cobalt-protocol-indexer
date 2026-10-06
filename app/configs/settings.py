@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -8,6 +9,12 @@ class Settings(BaseSettings):
     app_name: str = "Kelola Limbah API"
     debug: bool = False
     database_url: str = "sqlite:///./kelola_limbah.db"
+
+    # Server Configuration — custom port via env PORT / HOST
+    host: str = Field(default="0.0.0.0", description="Bind host, env: HOST")
+    port: int = Field(
+        default=8000, ge=1, le=65535, description="Listen port, env: PORT"
+    )
 
     certificate_competition_contract: str | None = None
     competition_contract: str | None = None
@@ -21,6 +28,8 @@ class Settings(BaseSettings):
     signer_manager_contract: str | None = None
     signer_manager_certificate_contract: str | None = None
     certificate_manager_contract: str | None = None
+
+    chain_id: int = 968
 
     web3_rpc_url: str = "https://rpc.bohr.life"
     web3_poll_interval: int = 5
@@ -74,3 +83,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+

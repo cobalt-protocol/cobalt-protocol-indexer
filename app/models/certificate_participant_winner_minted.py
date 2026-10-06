@@ -7,6 +7,7 @@ from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.competition import CompetitionModel
+    from app.models.indexer_state import IndexerStateModel
 
 
 class CertificateParticipantWinnerMintedModel(SQLModel, table=True):
@@ -19,6 +20,9 @@ class CertificateParticipantWinnerMintedModel(SQLModel, table=True):
     competition_id: str = Field(foreign_key="competition.id")
     winner_id: int = Field(sa_type=BigInteger)
     uri: str
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
 
     created_at: Optional[datetime] = Field(
         default=None,
@@ -42,4 +46,7 @@ class CertificateParticipantWinnerMintedModel(SQLModel, table=True):
 
     competition: Optional["CompetitionModel"] = Relationship(
         back_populates="certificate_participant_winner_minted"
+    )
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
+        back_populates="certificate_participant_winner_minteds"
     )

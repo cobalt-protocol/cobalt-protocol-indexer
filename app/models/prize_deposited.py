@@ -7,6 +7,7 @@ from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.competition import CompetitionModel
+    from app.models.indexer_state import IndexerStateModel
 
 
 class PrizeDepositedModel(SQLModel, table=True):
@@ -19,6 +20,9 @@ class PrizeDepositedModel(SQLModel, table=True):
     token_address: str
     sender: str
     amount: int = Field(sa_type=Numeric(78, 0))
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -40,5 +44,8 @@ class PrizeDepositedModel(SQLModel, table=True):
     )
 
     competition: Optional["CompetitionModel"] = Relationship(
+        back_populates="prize_deposits"
+    )
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
         back_populates="prize_deposits"
     )

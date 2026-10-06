@@ -7,6 +7,7 @@ from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.competition import CompetitionModel
+    from app.models.indexer_state import IndexerStateModel
 
 
 class PriceCompetitionModel(SQLModel, table=True):
@@ -19,6 +20,9 @@ class PriceCompetitionModel(SQLModel, table=True):
     token_address: str
     title: str
     description: str
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -41,6 +45,9 @@ class PriceCompetitionModel(SQLModel, table=True):
 
     competitions: List["CompetitionModel"] = Relationship(
         back_populates="price_competition"
+    )
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
+        back_populates="price_competitions"
     )
 
 

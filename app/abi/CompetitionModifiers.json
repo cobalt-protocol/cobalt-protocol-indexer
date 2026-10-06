@@ -1,0 +1,1 @@
+[{"type": "error", "name": "CompetitionDoesNotExist", "inputs": []}, {"type": "error", "name": "CompetitionNotEnded", "inputs": []}, {"type": "error", "name": "NotOrganization", "inputs": []}]

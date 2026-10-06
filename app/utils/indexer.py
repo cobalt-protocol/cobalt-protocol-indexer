@@ -81,6 +81,24 @@ class Web3Indexer:
         self.last_updated_at: Dict[str, str] = {}
         self._ipfs_cache: Dict[str, Dict[str, Any]] = {}
 
+    async def _resolve_indexer_state_id(self) -> str:
+        """Resolve chain_id via indexer_state.id (proper FK).
+
+        Semua child table (competition, listing_token, dst) tidak lagi
+        menyimpan `chain_id` mentah. Chain di-query via relasi
+        `indexer_state.id` -> `indexer_state.chain_id`.
+        Helper ini fetch/create baris `indexer_state` untuk
+        (contract_name="CompetitionManager", chain_id=settings.chain_id)
+        dan kembalikan PK `id` (ULID) untuk dipakai sebagai FK
+        `indexer_state_id` saat insert.
+        """
+        from app.databases.indexer_state import IndexerStateDatabases
+
+        return await IndexerStateDatabases.get_or_create_indexer_state_id(
+            contract_name="CompetitionManager",
+            chain_id=settings.chain_id,
+        )
+
     async def _fetch_from_ipfs(self, cid: str) -> Dict[str, Any]:
         if not cid or not isinstance(cid, str):
             return {}
@@ -244,7 +262,9 @@ class Web3Indexer:
         address = cfg["address"]
 
         if name not in self.last_scanned_blocks:
-            db_block = await IndexerStateDatabases.get_last_scanned_block(name)
+            db_block = await IndexerStateDatabases.get_last_scanned_block(
+                name, chain_id=settings.chain_id
+            )
             if db_block is not None:
                 self.last_scanned_blocks[name] = db_block
                 logger.info(
@@ -278,7 +298,9 @@ class Web3Indexer:
 
             self.last_scanned_blocks[name] = to_block
             self.last_updated_at[name] = datetime.now(timezone.utc).isoformat()
-            await IndexerStateDatabases.set_last_scanned_block(name, to_block)
+            await IndexerStateDatabases.set_last_scanned_block(
+                name, to_block, chain_id=settings.chain_id
+            )
 
         except Exception as e:
             logger.error(
@@ -367,11 +389,13 @@ class Web3Indexer:
             token_address = str(args.get("tokenAddress") or "")
             is_active = bool(args.get("isActive", True))
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = await ListingTokenDatabases.add_listing_token(
                 tx_hash=tx_hash,
                 listing_token_id=listing_token_id,
                 token_address=token_address,
                 is_active=is_active,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved ListingToken to DB with ULID: {saved.id} (listing_token_id: {listing_token_id})"
@@ -389,6 +413,7 @@ class Web3Indexer:
             sender = str(args.get("sender") or "")
             amount = int(args.get("amount") or 0)
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = await PrizeDepositedDatabases.add_prize_deposited(
                 tx_hash=tx_hash,
                 treasury_prize_id=treasury_prize_id,
@@ -396,6 +421,7 @@ class Web3Indexer:
                 token_address=token_address,
                 sender=sender,
                 amount=amount,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved PrizeDeposited to DB with ULID: {saved.id} (treasury_prize_id: {treasury_prize_id})"
@@ -415,6 +441,7 @@ class Web3Indexer:
             recipient = str(args.get("recipient") or "")
             amount = int(args.get("amount") or 0)
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = await PrizeDistributedDatabases.add_prize_distributed(
                 tx_hash=tx_hash,
                 treasury_prize_id=treasury_prize_id,
@@ -422,6 +449,7 @@ class Web3Indexer:
                 token_address=token_address,
                 recipient=recipient,
                 amount=amount,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved PrizeDistributed to DB with ULID: {saved.id} (treasury_prize_id: {treasury_prize_id})"
@@ -453,6 +481,7 @@ class Web3Indexer:
                     title = str(fee_meta.get("name") or fee_meta.get("title") or title)
                     description = str(fee_meta.get("description") or description)
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = await PriceCompetitionDatabases.add_price_competition(
                 tx_hash=tx_hash,
                 price_competition_fee_id=price_competition_fee_id,
@@ -460,6 +489,7 @@ class Web3Indexer:
                 token_address=token_address,
                 title=title,
                 description=description,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved PriceCompetition to DB with ULID: {saved.id} (price_competition_fee_id: {price_competition_fee_id})"
@@ -478,12 +508,14 @@ class Web3Indexer:
             token_address = str(args.get("tokenAddress") or "")
             amount = int(args.get("amount") or 0)
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = await CompetitionFeePaidDatabases.add_competition_fee_paid(
                 tx_hash=tx_hash,
                 competition_id=competition_id,
                 payer=payer,
                 token_address=token_address,
                 amount=amount,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved CompetitionFeePaid to DB with ULID: {saved.id} (event competition_id: {competition_id})"
@@ -512,6 +544,7 @@ class Web3Indexer:
                         or title
                     )
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = await ParticipantWinnerDatabases.add_participant_winner(
                 tx_hash=tx_hash,
                 winner_id=winner_id,
@@ -519,6 +552,7 @@ class Web3Indexer:
                 competition_id=competition_id,
                 participant_winner_id=participant_winner_id,
                 title=title,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved ParticipantWinner to DB with ULID: {saved.id} (winner_id: {winner_id}, participant_winner_id: {participant_winner_id})"
@@ -539,6 +573,7 @@ class Web3Indexer:
             competition_id = str(args.get("competitionId") or "")
             uri = str(args.get("uri") or "")
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = (
                 await CertificateParticipantMintedDatabases.add_certificate_participant_minted(
                     tx_hash=tx_hash,
@@ -546,6 +581,7 @@ class Web3Indexer:
                     participant=participant,
                     competition_id=competition_id,
                     uri=uri,
+                    indexer_state_id=indexer_state_id,
                 )
             )
             logger.info(
@@ -570,6 +606,7 @@ class Web3Indexer:
             winner_id = int(args.get("winnerId") or 0)
             uri = str(args.get("uri") or "")
 
+            indexer_state_id = await self._resolve_indexer_state_id()
             saved = (
                 await CertificateParticipantWinnerMintedDatabases.add_certificate_participant_winner_minted(
                     tx_hash=tx_hash,
@@ -578,6 +615,7 @@ class Web3Indexer:
                     competition_id=competition_id,
                     winner_id=winner_id,
                     uri=uri,
+                    indexer_state_id=indexer_state_id,
                 )
             )
             logger.info(
@@ -606,11 +644,13 @@ class Web3Indexer:
                 if fee_token_address is None and not fee:
                     fee = None
 
+                indexer_state_id = await self._resolve_indexer_state_id()
                 await CompetitionDatabases.update_competition_payment(
                     competition_id=competition_id,
                     fee_token_address=fee_token_address,
                     fee=fee,
                     tx_hash=tx_hash,
+                    indexer_state_id=indexer_state_id,
                 )
                 logger.info(
                     f"Successfully saved CompetitionPaymentConfigured to DB (competition_id: {competition_id}, fee_token_address: {fee_token_address}, fee: {fee})"
@@ -640,6 +680,7 @@ class Web3Indexer:
                             or ""
                         )
 
+                indexer_state_id = await self._resolve_indexer_state_id()
                 await CompetitionDatabases.configure_competition_winner(
                     competition_id=competition_id,
                     winner_id=winner_id,
@@ -647,6 +688,7 @@ class Web3Indexer:
                     certificate_cid=certificate_cid,
                     category=category,
                     tx_hash=tx_hash,
+                    indexer_state_id=indexer_state_id,
                 )
                 logger.info(
                     f"Successfully saved CompetitionWinnerConfigured to DB (competition_id: {competition_id}, winner_id: {winner_id}, prize_token: {prize_token}, prize_amount: {prize_amount})"
@@ -823,6 +865,7 @@ class Web3Indexer:
                 fee_token_address=fee_token_address,
                 price_competition_fee_id=price_competition_fee_id,
                 winners=winners,
+                indexer_state_id=await self._resolve_indexer_state_id(),
             )
             logger.info(
                 f"Successfully saved Competition to DB with ULID: {saved_comp.id} (competition_id: {saved_comp.competition_id}, tx: {tx_hash})"

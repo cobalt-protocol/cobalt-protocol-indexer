@@ -5,6 +5,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import func
 
 from app.configs.database import AsyncSessionLocal
+from app.configs import settings
 from app.models.user import UserModel
 from app.models.competition import CompetitionModel
 from app.models.organization import OrganizationModel
@@ -18,10 +19,24 @@ class CompetitionDatabases:
         db: AsyncSession,
         competition_id: str,
         tx_hash: str,
+        chain_id: Optional[int] = None,
+        indexer_state_id: Optional[str] = None,
+        contract_name: str = "CompetitionManager",
     ) -> CompetitionModel:
+        # Resolve proper FK -> indexer_state.id
+        if indexer_state_id is None:
+            if chain_id is None:
+                chain_id = settings.chain_id
+            from app.databases.indexer_state import IndexerStateDatabases
+
+            indexer_state_id = await IndexerStateDatabases.resolve_indexer_state_id(
+                db, contract_name=contract_name, chain_id=chain_id
+            )
+
         if tx_hash:
             statement = select(CompetitionModel).where(
-                CompetitionModel.tx_hash == tx_hash
+                CompetitionModel.tx_hash == tx_hash,
+                CompetitionModel.indexer_state_id == indexer_state_id,
             )
             result = await db.exec(statement)
             comp = result.first()
@@ -31,16 +46,27 @@ class CompetitionDatabases:
                     db.add(comp)
                     await db.commit()
                     await db.refresh(comp)
+                if not getattr(comp, "indexer_state_id", None):
+                    comp.indexer_state_id = indexer_state_id
+                    db.add(comp)
+                    await db.commit()
+                    await db.refresh(comp)
                 return comp
 
         if competition_id:
             statement = select(CompetitionModel).where(
-                (CompetitionModel.competition_id == competition_id)
-                | (CompetitionModel.id == competition_id)
+                ((CompetitionModel.competition_id == competition_id)
+                | (CompetitionModel.id == competition_id)),
+                CompetitionModel.indexer_state_id == indexer_state_id,
             )
             result = await db.exec(statement)
             comp = result.first()
             if comp:
+                if not getattr(comp, "indexer_state_id", None):
+                    comp.indexer_state_id = indexer_state_id
+                    db.add(comp)
+                    await db.commit()
+                    await db.refresh(comp)
                 return comp
 
         now = datetime.now()
@@ -60,6 +86,7 @@ class CompetitionDatabases:
             "certificate_cid": "",
             "guidebook_cid": "",
             "competition_id": competition_id,
+            "indexer_state_id": indexer_state_id,
         }
 
         stub = CompetitionModel(**kwargs)
@@ -90,9 +117,25 @@ class CompetitionDatabases:
         formation: str = "",
         price_competition_fee_id: Optional[int] = None,
         winners: Optional[List[Dict[str, Any]]] = None,
+        chain_id: Optional[int] = None,
+        indexer_state_id: Optional[str] = None,
+        contract_name: str = "CompetitionManager",
         session: Optional[AsyncSession] = None,
     ) -> CompetitionModel:
+        if chain_id is None and indexer_state_id is None:
+            chain_id = settings.chain_id
+
         async def _impl(db: AsyncSession) -> CompetitionModel:
+            # Resolve proper FK -> indexer_state.id (chain di-resolve via relasi)
+            if indexer_state_id is not None:
+                resolved_state_id = indexer_state_id
+            else:
+                from app.databases.indexer_state import IndexerStateDatabases
+
+                resolved_state_id = await IndexerStateDatabases.resolve_indexer_state_id(
+                    db, contract_name=contract_name, chain_id=chain_id
+                )
+
             statement = select(UserModel).where(
                 func.lower(UserModel.wallet_address) == (wallet_address.lower() if wallet_address else "")
             )
@@ -133,7 +176,8 @@ class CompetitionDatabases:
             if price_competition_fee_id is not None:
                 price_comp_stmt = select(PriceCompetitionModel).where(
                     PriceCompetitionModel.price_competition_fee_id
-                    == price_competition_fee_id
+                    == price_competition_fee_id,
+                    PriceCompetitionModel.indexer_state_id == resolved_state_id,
                 )
                 price_comp_result = await db.exec(price_comp_stmt)
                 price_comp = price_comp_result.first()
@@ -143,15 +187,17 @@ class CompetitionDatabases:
             existing = None
             if tx_hash:
                 statement = select(CompetitionModel).where(
-                    CompetitionModel.tx_hash == tx_hash
+                    CompetitionModel.tx_hash == tx_hash,
+                    CompetitionModel.indexer_state_id == resolved_state_id,
                 )
                 result = await db.exec(statement)
                 existing = result.first()
 
             if not existing and competition_id:
                 statement = select(CompetitionModel).where(
-                    (CompetitionModel.competition_id == competition_id)
-                    | (CompetitionModel.id == competition_id)
+                    ((CompetitionModel.competition_id == competition_id)
+                    | (CompetitionModel.id == competition_id)),
+                    CompetitionModel.indexer_state_id == resolved_state_id,
                 )
                 result = await db.exec(statement)
                 existing = result.first()
@@ -172,6 +218,7 @@ class CompetitionDatabases:
                 existing.pirze_certificate_claim = pirze_certificate_claim
                 existing.certificate_cid = certificate_cid
                 existing.guidebook_cid = guidebook_cid
+                existing.indexer_state_id = resolved_state_id
                 if fee is not None:
                     existing.fee = fee
                 if resolved_fee_token_address:
@@ -206,6 +253,7 @@ class CompetitionDatabases:
                     "fee_token_address": resolved_fee_token_address,
                     "price_competition_id": price_competition_id,
                     "competition_id": competition_id,
+                    "indexer_state_id": resolved_state_id,
                 }
 
                 competition = CompetitionModel(**kwargs)
@@ -301,11 +349,30 @@ class CompetitionDatabases:
         fee_token_address: Optional[str] = None,
         fee: Optional[int] = None,
         tx_hash: str = "",
+        chain_id: Optional[int] = None,
+        indexer_state_id: Optional[str] = None,
+        contract_name: str = "CompetitionManager",
         session: Optional[AsyncSession] = None,
     ) -> CompetitionModel:
+        if chain_id is None and indexer_state_id is None:
+            chain_id = settings.chain_id
+
         async def _impl(db: AsyncSession) -> CompetitionModel:
+            if indexer_state_id is not None:
+                resolved_state_id = indexer_state_id
+            else:
+                from app.databases.indexer_state import IndexerStateDatabases
+
+                resolved_state_id = await IndexerStateDatabases.resolve_indexer_state_id(
+                    db, contract_name=contract_name, chain_id=chain_id
+                )
+
             comp = await CompetitionDatabases.ensure_competition_exists(
-                db, competition_id, tx_hash
+                db,
+                competition_id,
+                tx_hash,
+                chain_id=chain_id,
+                indexer_state_id=resolved_state_id,
             )
             if fee_token_address is not None:
                 comp.fee_token_address = fee_token_address
@@ -329,11 +396,30 @@ class CompetitionDatabases:
         certificate_cid: str = "",
         category: str = "",
         tx_hash: str = "",
+        chain_id: Optional[int] = None,
+        indexer_state_id: Optional[str] = None,
+        contract_name: str = "CompetitionManager",
         session: Optional[AsyncSession] = None,
     ) -> PrizeWinnerModel:
+        if chain_id is None and indexer_state_id is None:
+            chain_id = settings.chain_id
+
         async def _impl(db: AsyncSession) -> PrizeWinnerModel:
+            if indexer_state_id is not None:
+                resolved_state_id = indexer_state_id
+            else:
+                from app.databases.indexer_state import IndexerStateDatabases
+
+                resolved_state_id = await IndexerStateDatabases.resolve_indexer_state_id(
+                    db, contract_name=contract_name, chain_id=chain_id
+                )
+
             comp = await CompetitionDatabases.ensure_competition_exists(
-                db, competition_id, tx_hash
+                db,
+                competition_id,
+                tx_hash,
+                chain_id=chain_id,
+                indexer_state_id=resolved_state_id,
             )
 
             statement = select(PrizeWinnerModel).where(

@@ -1,0 +1,1 @@
+[{"type": "error", "name": "CertificateAlreadyClaimed", "inputs": []}, {"type": "error", "name": "CertificateNonTransferable", "inputs": []}, {"type": "error", "name": "CompetitionDoesNotExist", "inputs": []}, {"type": "error", "name": "CompetitionNotEnded", "inputs": []}, {"type": "error", "name": "InvalidTeamId", "inputs": []}]

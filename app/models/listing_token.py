@@ -1,9 +1,12 @@
 from datetime import datetime
-from typing import Optional
-from sqlmodel import Field, SQLModel
+from typing import Optional, TYPE_CHECKING
+from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Column, DateTime, BigInteger
 from sqlalchemy.sql import func
 from app.utils import generate_ulid
+
+if TYPE_CHECKING:
+    from app.models.indexer_state import IndexerStateModel
 
 
 class ListingTokenModel(SQLModel, table=True):
@@ -14,6 +17,9 @@ class ListingTokenModel(SQLModel, table=True):
     listing_token_id: int = Field(sa_type=BigInteger)
     token_address: str
     is_active: bool = Field(default=True)
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -32,5 +38,9 @@ class ListingTokenModel(SQLModel, table=True):
     deleted_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
+        back_populates="listing_tokens"
     )
 
