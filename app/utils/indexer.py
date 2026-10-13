@@ -36,9 +36,38 @@ IGNORED_EVENTS = {
 }
 
 
+def _ensure_0x_hash(val: Any) -> str:
+    """Pastikan hash hex diawali '0x' (lowercase).
+
+    Handle bytes, HexBytes, dan str. Jika sudah ada prefix 0x, normalisasi ke lowercase.
+    Jika belum, tambahkan '0x'. Untuk string kosong / None kembalikan apa adanya.
+    Digunakan untuk filter semua hash yang dihasilkan handler (tx_hash, signature, dll).
+    """
+    if val is None:
+        return ""
+    if isinstance(val, (bytes, HexBytes)):
+        # HexBytes.to_0x_hex() sudah include 0x, bytes.hex() tidak
+        if isinstance(val, HexBytes):
+            try:
+                return val.to_0x_hex().lower()
+            except Exception:
+                h = val.hex()
+                return (
+                    ("0x" + h).lower() if not h.lower().startswith("0x") else h.lower()
+                )
+        h = val.hex()
+        return ("0x" + h).lower() if not h.lower().startswith("0x") else h.lower()
+    s = str(val).strip()
+    if not s:
+        return s
+    if s.lower().startswith("0x"):
+        return s.lower()
+    return "0x" + s.lower()
+
+
 def _clean_args(args: Any) -> Any:
     if isinstance(args, (bytes, HexBytes)):
-        return args.hex()
+        return _ensure_0x_hash(args)
     elif isinstance(args, (dict, Mapping)):
         return {str(k): _clean_args(v) for k, v in args.items()}
     elif isinstance(args, (list, tuple, set)):
@@ -322,7 +351,7 @@ class Web3Indexer:
         if not event_name or event_name in IGNORED_EVENTS:
             return
 
-        tx_hash = HexBytes(log["transactionHash"]).hex()
+        tx_hash = _ensure_0x_hash(log["transactionHash"])
         log_index = int(log["logIndex"])
         block_number = int(log["blockNumber"])
 
@@ -368,20 +397,18 @@ class Web3Indexer:
             ):
                 await self._handle_price_competition_fee_set(tx_hash, cleaned_args)
             elif event_name == "CertificateParticipantMinted":
-                await self._handle_certificate_participant_minted(
-                    tx_hash, cleaned_args
-                )
+                await self._handle_certificate_participant_minted(tx_hash, cleaned_args)
             elif event_name == "CertificateParticipantWinnerMinted":
                 await self._handle_certificate_participant_winner_minted(
                     tx_hash, cleaned_args
                 )
+            elif event_name == "TeamPaymentCreated":
+                await self._handle_team_payment_created(tx_hash, cleaned_args)
 
         except Exception as e:
             logger.error(f"Error processing log {tx_hash}:{log_index}: {e}")
 
-    async def _handle_listing_token_added(
-        self, tx_hash: str, args: Dict[str, Any]
-    ):
+    async def _handle_listing_token_added(self, tx_hash: str, args: Dict[str, Any]):
         try:
             from app.databases.listing_token import ListingTokenDatabases
 
@@ -463,17 +490,13 @@ class Web3Indexer:
         try:
             from app.databases.price_competition import PriceCompetitionDatabases
 
-            price_competition_fee_id = int(
-                args.get("id") or args.get("priceCompetitionFeeId") or 0
-            )
+            price_competition_fee_id = int(args.get("id") or 0)
             treasury_fee = int(args.get("treasuryFee") or 0)
             token_address = str(args.get("tokenAddress") or "")
-            cid = str(
-                args.get("cid") or args.get("title") or args.get("description") or ""
-            )
+            cid = str(args.get("cid") or "")
 
-            title = str(args.get("title") or cid or "")
-            description = str(args.get("description") or cid or "")
+            title = cid
+            description = cid
 
             if cid:
                 fee_meta = await self._fetch_from_ipfs(cid)
@@ -526,36 +549,64 @@ class Web3Indexer:
     async def _handle_winner_set(self, tx_hash: str, args: Dict[str, Any]):
         try:
             from app.databases.participant_winner import ParticipantWinnerDatabases
+            from app.configs.database import AsyncSessionLocal
+            from sqlmodel import select
+            from app.models.prize_winner import PrizeWinnerModel
+            from app.databases.competition import CompetitionDatabases
 
             winner_id = int(args.get("winnerId") or 0)
             participant = str(args.get("participant") or "")
             competition_id = str(args.get("competitionId") or "")
-            participant_winner_id = winner_id
-            certificate_cid = str(args.get("certificateCID") or "")
 
-            title = certificate_cid
-            if certificate_cid:
-                cert_meta = await self._fetch_from_ipfs(certificate_cid)
-                if isinstance(cert_meta, dict):
-                    title = str(
-                        cert_meta.get("title")
-                        or cert_meta.get("name")
-                        or cert_meta.get("category")
-                        or title
-                    )
-
+            title = ""
+            # prize_winner_id is BigInt FK -> prize_winner.winner_id (global @unique)
+            # No separate winner_id column on participant_winner; winner_id == prize_winner_id
+            prize_winner_id: int | None = winner_id if winner_id else None
             indexer_state_id = await self._resolve_indexer_state_id()
+
+            try:
+                async with AsyncSessionLocal() as db:
+                    comp = await CompetitionDatabases.ensure_competition_exists(
+                        db,
+                        competition_id,
+                        tx_hash,
+                        indexer_state_id=indexer_state_id,
+                    )
+                    # winner_id is globally UNIQUE on prize_winner, so lookup by winner_id only
+                    stmt = select(PrizeWinnerModel).where(
+                        PrizeWinnerModel.winner_id == winner_id,
+                    )
+                    res = await db.exec(stmt)
+                    _first = res.first()
+                    prize_winner = (
+                        _first[0] if isinstance(_first, (tuple, list)) else _first
+                    )
+                    if prize_winner:
+                        if getattr(prize_winner, "category", None):
+                            title = str(prize_winner.category)
+                        # keep prize_winner_id as winner_id (BigInt) — FK to prize_winner.winner_id
+                        try:
+                            prize_winner_id = int(getattr(prize_winner, "winner_id", winner_id))
+                        except Exception:
+                            prize_winner_id = winner_id
+            except Exception as db_e:
+                logger.warning(
+                    f"Failed to query PrizeWinner category for title: {db_e}"
+                )
+
+            if not title:
+                title = f"Winner #{winner_id}"
+
             saved = await ParticipantWinnerDatabases.add_participant_winner(
                 tx_hash=tx_hash,
-                winner_id=winner_id,
                 participant=participant,
                 competition_id=competition_id,
-                participant_winner_id=participant_winner_id,
                 title=title,
+                prize_winner_id=prize_winner_id,
                 indexer_state_id=indexer_state_id,
             )
             logger.info(
-                f"Successfully saved ParticipantWinner to DB with ULID: {saved.id} (winner_id: {winner_id}, participant_winner_id: {participant_winner_id})"
+                f"Successfully saved ParticipantWinner to DB with ULID: {saved.id} (prize_winner_id(BigInt FK->prize_winner.winner_id): {prize_winner_id})"
             )
         except Exception as e:
             logger.error(f"Failed to save WinnerSet event to DB: {e}")
@@ -573,20 +624,237 @@ class Web3Indexer:
             competition_id = str(args.get("competitionId") or "")
             uri = str(args.get("uri") or "")
 
+            # ── Resolve team_id via IPFS uri (ipfs://<CID>) ──────────────────
+            # URI example: ipfs://QmZhYcERutv3RBU57x2s1CgkHESpL6McmzZc6aWWZXyA2q
+            # CID extracted -> fetch via Kubo (_fetch_from_ipfs) -> JSON must contain team_id
+            # team_id from IPFS is ULID of team table, used as FK for certificate_participant_minted.team_id
+            ipfs_team_id: Optional[str] = None
+            if uri:
+                cid_raw = uri.strip()
+                if cid_raw.startswith("ipfs://"):
+                    cid_raw = cid_raw[7:]
+                # handle possible ipfs://CID/path or CID with query
+                cid_raw = cid_raw.split("/")[0].split("?")[0].strip()
+                if cid_raw:
+                    try:
+                        ipfs_data = await self._fetch_from_ipfs(cid_raw)
+                        if isinstance(ipfs_data, dict) and ipfs_data:
+                            # primary keys from buildParticipantCertificateMetadata (api/src/common/utils/ipfs.util.ts)
+                            candidate = (
+                                ipfs_data.get("team_id")
+                                or ipfs_data.get("teamId")
+                                or ipfs_data.get("teamID")
+                                or ipfs_data.get("team")
+                            )
+                            # sometimes nested under 'data'
+                            if candidate is None and isinstance(
+                                ipfs_data.get("data"), dict
+                            ):
+                                candidate = ipfs_data["data"].get(
+                                    "team_id"
+                                ) or ipfs_data["data"].get("teamId")
+                            if candidate is not None and str(candidate).strip():
+                                ipfs_team_id = str(candidate).strip()
+                                logger.info(
+                                    f"Resolved team_id={ipfs_team_id} from IPFS uri={uri} (CID={cid_raw}) for CertificateParticipantMinted token_id={token_id}"
+                                )
+                            else:
+                                logger.warning(
+                                    f"IPFS data for CID {cid_raw} (uri={uri}) has no team_id field. Keys: {list(ipfs_data.keys())} | preview: {str(ipfs_data)[:500]}"
+                                )
+                        else:
+                            logger.warning(
+                                f"IPFS fetch for CID {cid_raw} (uri={uri}) returned empty or non-dict: {ipfs_data}"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to fetch team_id from IPFS CID {cid_raw} (uri={uri}): {e}",
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        f"CertificateParticipantMinted uri is present but CID empty after stripping ipfs:// prefix: {uri}"
+                    )
+
+            # Fallback / final resolution: IPFS team_id (ULID) takes priority, else on-chain numeric teamId
+            raw_team_id: Optional[str] = None
+            team_id_int: Optional[int] = None
+            if ipfs_team_id:
+                raw_team_id = ipfs_team_id
+                # if raw_team_id is numeric string, also set team_id_int for helper's numeric path; else keep None for direct ULID lookup
+                try:
+                    if raw_team_id.isdigit():
+                        team_id_int = int(raw_team_id)
+                except Exception:
+                    team_id_int = None
+            else:
+                # fallback to on-chain args (legacy)
+                raw_team_id_candidate = args.get("teamId")
+                if (
+                    raw_team_id_candidate is not None
+                    and str(raw_team_id_candidate).strip() != ""
+                ):
+                    raw_team_id = str(raw_team_id_candidate).strip()
+                    try:
+                        team_id_int = int(raw_team_id)
+                    except Exception:
+                        team_id_int = None
+                if uri:
+                    logger.warning(
+                        f"CertificateParticipantMinted token_id={token_id} using fallback on-chain teamId={raw_team_id} (IPFS team_id not found for uri={uri})"
+                    )
+
             indexer_state_id = await self._resolve_indexer_state_id()
-            saved = (
-                await CertificateParticipantMintedDatabases.add_certificate_participant_minted(
-                    tx_hash=tx_hash,
-                    token_id=token_id,
-                    participant=participant,
-                    competition_id=competition_id,
-                    uri=uri,
-                    indexer_state_id=indexer_state_id,
-                )
+            saved = await CertificateParticipantMintedDatabases.add_certificate_participant_minted(
+                tx_hash=tx_hash,
+                token_id=token_id,
+                participant=participant,
+                competition_id=competition_id,
+                uri=uri,
+                team_id=team_id_int,
+                raw_team_id=raw_team_id,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved CertificateParticipantMinted to DB with ULID: {saved.id} (token_id: {token_id}, competition_id: {competition_id})"
             )
+
+            # Hapus signature single-use setelah mint sukses (user_id + signature)
+            try:
+                raw_sig = args.get("signature")
+                if isinstance(raw_sig, (bytes, HexBytes)):
+                    sig_str = raw_sig.hex()
+                elif raw_sig is None:
+                    sig_str = ""
+                else:
+                    sig_str = str(raw_sig).strip()
+
+                if sig_str:
+                    sig_norm = sig_str.lower().strip()
+                    if not sig_norm.startswith("0x"):
+                        sig_norm = "0x" + sig_norm
+                    sig_no0x = sig_norm[2:]
+
+                    user_id = getattr(saved, "user_id", None)
+                    # fallback resolve user_id via participant wallet bila saved.user_id None
+                    if not user_id and participant:
+                        try:
+                            from sqlmodel import select as _select_fallback
+                            from sqlalchemy import func as _func_fallback
+                            from app.configs.database import (
+                                AsyncSessionLocal as _AsyncSessionLocalFallback,
+                            )
+                            from app.models.user import UserModel as _UserModelFallback
+
+                            async with _AsyncSessionLocalFallback() as _db_fb:
+                                _stmt_fb = _select_fallback(_UserModelFallback).where(
+                                    _func_fallback.lower(
+                                        _UserModelFallback.wallet_address
+                                    )
+                                    == participant.lower()
+                                )
+                                _res_fb = await _db_fb.exec(_stmt_fb)
+                                _first = _res_fb.first()
+                                _user_fb = (
+                                    _first[0]
+                                    if isinstance(_first, (tuple, list))
+                                    else _first
+                                )
+                                if _user_fb is not None:
+                                    user_id = getattr(_user_fb, "id", None)
+                        except Exception as _fb_e:
+                            logger.debug(
+                                f"Fallback user_id resolve failed for {participant}: {_fb_e}"
+                            )
+
+                    if user_id and sig_norm:
+                        from sqlalchemy import (
+                            delete as _delete,
+                            func as _func2,
+                            or_ as _or,
+                        )
+                        from app.configs.database import (
+                            AsyncSessionLocal as _AsyncSessionLocal2,
+                        )
+                        from app.models.signature_certificate_participant import (
+                            SignatureCertificateParticipantModel,
+                        )
+
+                        async with _AsyncSessionLocal2() as _db2:
+                            # hard delete via WHERE user_id + (signature with/without 0x, case-insensitive)
+                            _del = _delete(SignatureCertificateParticipantModel).where(
+                                SignatureCertificateParticipantModel.user_id == user_id,
+                                _or(
+                                    _func2.lower(
+                                        SignatureCertificateParticipantModel.signature
+                                    )
+                                    == sig_norm,
+                                    _func2.lower(
+                                        SignatureCertificateParticipantModel.signature
+                                    )
+                                    == sig_no0x,
+                                ),
+                            )
+                            _result = await _db2.exec(_del)
+                            await _db2.commit()
+                            try:
+                                _count = getattr(_result, "rowcount", 0) or 0
+                            except Exception:
+                                _count = 0
+                            if _count:
+                                logger.info(
+                                    f"Deleted { _count} signature_certificate_participant row(s) for user_id={user_id} sig={sig_norm[:10]}... after CertificateParticipantMinted token_id={token_id}"
+                                )
+                            else:
+                                # fallback: coba select+delete manual (untuk sqlite/edge)
+                                from sqlmodel import select as _select2
+
+                                _stmt2 = _select2(
+                                    SignatureCertificateParticipantModel
+                                ).where(
+                                    SignatureCertificateParticipantModel.user_id
+                                    == user_id,
+                                    _or(
+                                        _func2.lower(
+                                            SignatureCertificateParticipantModel.signature
+                                        )
+                                        == sig_norm,
+                                        _func2.lower(
+                                            SignatureCertificateParticipantModel.signature
+                                        )
+                                        == sig_no0x,
+                                    ),
+                                )
+                                _res2 = await _db2.exec(_stmt2)
+                                _rows = _res2.all()
+                                if _rows:
+                                    for _row in _rows:
+                                        _obj = (
+                                            _row[0]
+                                            if isinstance(_row, (tuple, list))
+                                            else _row
+                                        )
+                                        await _db2.delete(_obj)
+                                    await _db2.commit()
+                                    logger.info(
+                                        f"Deleted {len(_rows)} signature_certificate_participant row(s) (fallback) for user_id={user_id} sig={sig_norm[:10]}... token_id={token_id}"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"No matching signature_certificate_participant found to delete for user_id={user_id} sig={sig_norm[:10]}... (token_id={token_id})"
+                                    )
+                    else:
+                        logger.debug(
+                            f"Skip signature cleanup: user_id={user_id} sig_present={bool(sig_str)} token_id={token_id}"
+                        )
+                else:
+                    logger.debug(
+                        f"No signature in CertificateParticipantMinted args, skip cleanup (token_id={token_id})"
+                    )
+            except Exception as _e:
+                logger.warning(
+                    f"Failed to delete signature_certificate_participant after mint (token_id={token_id}): {_e}"
+                )
         except Exception as e:
             logger.error(
                 f"Failed to save CertificateParticipantMinted event to DB: {e}"
@@ -605,26 +873,281 @@ class Web3Indexer:
             competition_id = str(args.get("competitionId") or "")
             winner_id = int(args.get("winnerId") or 0)
             uri = str(args.get("uri") or "")
+            raw_team_id_w = args.get("teamId")
+            team_id_int_w = None
+            try:
+                if raw_team_id_w is not None and str(raw_team_id_w).strip() != "":
+                    team_id_int_w = int(str(raw_team_id_w).strip())
+            except Exception:
+                team_id_int_w = None
 
             indexer_state_id = await self._resolve_indexer_state_id()
-            saved = (
-                await CertificateParticipantWinnerMintedDatabases.add_certificate_participant_winner_minted(
-                    tx_hash=tx_hash,
-                    token_id=token_id,
-                    participant=participant,
-                    competition_id=competition_id,
-                    winner_id=winner_id,
-                    uri=uri,
-                    indexer_state_id=indexer_state_id,
-                )
+            saved = await CertificateParticipantWinnerMintedDatabases.add_certificate_participant_winner_minted(
+                tx_hash=tx_hash,
+                token_id=token_id,
+                participant=participant,
+                competition_id=competition_id,
+                winner_id=winner_id,
+                uri=uri,
+                team_id=team_id_int_w,
+                raw_team_id=str(raw_team_id_w) if raw_team_id_w is not None else None,
+                indexer_state_id=indexer_state_id,
             )
             logger.info(
                 f"Successfully saved CertificateParticipantWinnerMinted to DB with ULID: {saved.id} (token_id: {token_id}, winner_id: {winner_id}, competition_id: {competition_id})"
             )
+
+            # Hapus signature single-use setelah winner mint sukses (user_id + signature) -> signature_certificate_winner
+            try:
+                raw_sig = args.get("signature")
+                if isinstance(raw_sig, (bytes, HexBytes)):
+                    sig_str = raw_sig.hex()
+                elif raw_sig is None:
+                    sig_str = ""
+                else:
+                    sig_str = str(raw_sig).strip()
+
+                if sig_str:
+                    sig_norm = sig_str.lower().strip()
+                    if not sig_norm.startswith("0x"):
+                        sig_norm = "0x" + sig_norm
+                    sig_no0x = sig_norm[2:]
+
+                    user_id = getattr(saved, "user_id", None)
+                    if not user_id and participant:
+                        try:
+                            from sqlmodel import select as _select_fallback_w
+                            from sqlalchemy import func as _func_fallback_w
+                            from app.configs.database import (
+                                AsyncSessionLocal as _AsyncSessionLocalFallbackW,
+                            )
+                            from app.models.user import UserModel as _UserModelFallbackW
+
+                            async with _AsyncSessionLocalFallbackW() as _db_fb_w:
+                                _stmt_fb_w = _select_fallback_w(
+                                    _UserModelFallbackW
+                                ).where(
+                                    _func_fallback_w.lower(
+                                        _UserModelFallbackW.wallet_address
+                                    )
+                                    == participant.lower()
+                                )
+                                _res_fb_w = await _db_fb_w.exec(_stmt_fb_w)
+                                _first_w = _res_fb_w.first()
+                                _user_fb_w = (
+                                    _first_w[0]
+                                    if isinstance(_first_w, (tuple, list))
+                                    else _first_w
+                                )
+                                if _user_fb_w is not None:
+                                    user_id = getattr(_user_fb_w, "id", None)
+                        except Exception as _fb_e_w:
+                            logger.debug(
+                                f"Fallback user_id resolve failed for winner {participant}: {_fb_e_w}"
+                            )
+
+                    if user_id and sig_norm:
+                        from sqlalchemy import (
+                            delete as _delete_w,
+                            func as _func2_w,
+                            or_ as _or_w,
+                        )
+                        from app.configs.database import (
+                            AsyncSessionLocal as _AsyncSessionLocal2W,
+                        )
+                        from app.models.signature_certificate_winner import (
+                            SignatureCertificateWinnerModel,
+                        )
+
+                        async with _AsyncSessionLocal2W() as _db2_w:
+                            _del_w = _delete_w(SignatureCertificateWinnerModel).where(
+                                SignatureCertificateWinnerModel.user_id == user_id,
+                                _or_w(
+                                    _func2_w.lower(
+                                        SignatureCertificateWinnerModel.signature
+                                    )
+                                    == sig_norm,
+                                    _func2_w.lower(
+                                        SignatureCertificateWinnerModel.signature
+                                    )
+                                    == sig_no0x,
+                                ),
+                            )
+                            _result_w = await _db2_w.exec(_del_w)
+                            await _db2_w.commit()
+                            try:
+
+                                _count_w = getattr(_result_w, "rowcount", 0) or 0
+                            except Exception:
+                                _count_w = 0
+                            if _count_w:
+                                logger.info(
+                                    f"Deleted {_count_w} signature_certificate_winner row(s) for user_id={user_id} sig={sig_norm[:10]}... after CertificateParticipantWinnerMinted token_id={token_id} winner_id={winner_id}"
+                                )
+                            else:
+                                from sqlmodel import select as _select2_w
+
+                                _stmt2_w = _select2_w(
+                                    SignatureCertificateWinnerModel
+                                ).where(
+                                    SignatureCertificateWinnerModel.user_id == user_id,
+                                    _or_w(
+                                        _func2_w.lower(
+                                            SignatureCertificateWinnerModel.signature
+                                        )
+                                        == sig_norm,
+                                        _func2_w.lower(
+                                            SignatureCertificateWinnerModel.signature
+                                        )
+                                        == sig_no0x,
+                                    ),
+                                )
+                                _res2_w = await _db2_w.exec(_stmt2_w)
+                                _rows_w = _res2_w.all()
+                                if _rows_w:
+                                    for _row_w in _rows_w:
+                                        _obj_w = (
+                                            _row_w[0]
+                                            if isinstance(_row_w, (tuple, list))
+                                            else _row_w
+                                        )
+                                        await _db2_w.delete(_obj_w)
+                                    await _db2_w.commit()
+                                    logger.info(
+                                        f"Deleted {len(_rows_w)} signature_certificate_winner row(s) (fallback) for user_id={user_id} sig={sig_norm[:10]}... token_id={token_id} winner_id={winner_id}"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"No matching signature_certificate_winner found to delete for user_id={user_id} sig={sig_norm[:10]}... (token_id={token_id} winner_id={winner_id})"
+                                    )
+                    else:
+                        logger.debug(
+                            f"Skip winner signature cleanup: user_id={user_id} sig_present={bool(sig_str)} token_id={token_id} winner_id={winner_id}"
+                        )
+                else:
+                    logger.debug(
+                        f"No signature in CertificateParticipantWinnerMinted args, skip cleanup (token_id={token_id} winner_id={winner_id})"
+                    )
+            except Exception as _e_w:
+                logger.warning(
+                    f"Failed to delete signature_certificate_winner after winner mint (token_id={token_id} winner_id={winner_id}): {_e_w}"
+                )
         except Exception as e:
             logger.error(
                 f"Failed to save CertificateParticipantWinnerMinted event to DB: {e}"
             )
+
+    async def _handle_team_payment_created(self, tx_hash: str, args: Dict[str, Any]):
+        try:
+            from app.configs.database import AsyncSessionLocal
+            from sqlmodel import select
+            from sqlalchemy import func
+            from app.models.user import UserModel
+            from app.models.competition import CompetitionModel
+            from app.models.team import TeamModel
+            from app.models.team_role import TeamRoleModel
+            from app.models.team_code import TeamCodeModel
+            from app.models.skills_team import SkillsTeamModel
+            from app.models.requirements_team import RequirementsTeamModel
+            import secrets
+
+            competition_id = str(args.get("competitionId") or "")
+            cid = str(args.get("cid") or "")
+            wallet_address = str(args.get("from") or "")
+            if not wallet_address:
+                logger.warning("Missing 'from' address in TeamPaymentCreated event")
+                return
+
+            indexer_state_id = await self._resolve_indexer_state_id()
+
+            ipfs_data = await self._fetch_from_ipfs(cid) if cid else {}
+
+            async with AsyncSessionLocal() as db:
+                # 1. User
+                wallet_lower = wallet_address.lower()
+                stmt_user = select(UserModel).where(
+                    func.lower(UserModel.wallet_address) == wallet_lower
+                )
+                res_user = await db.exec(stmt_user)
+                user = res_user.first()
+                if not user:
+                    user = UserModel(wallet_address=wallet_address)
+                    db.add(user)
+                    await db.commit()
+                    await db.refresh(user)
+                elif isinstance(user, (tuple, list)):
+                    user = user[0]
+
+                # 2. Competition
+                stmt_comp = select(CompetitionModel).where(
+                    (CompetitionModel.competition_id == competition_id)
+                    | (CompetitionModel.id == competition_id),
+                    CompetitionModel.indexer_state_id == indexer_state_id,
+                )
+                res_comp = await db.exec(stmt_comp)
+                competition = res_comp.first()
+                if not competition:
+                    logger.warning(
+                        f"Competition {competition_id} not found for TeamPaymentCreated"
+                    )
+                    return
+                elif isinstance(competition, (tuple, list)):
+                    competition = competition[0]
+
+                # 3. Process IPFS data
+                name = str(ipfs_data.get("name") or "").strip()
+                if not name:
+                    name = f"Team {secrets.token_hex(3).upper()}"
+
+                visibility = bool(ipfs_data.get("visibility", True))
+                description = str(ipfs_data.get("description") or "").strip()
+
+                skills = ipfs_data.get("skills_team") or ipfs_data.get("skills")
+                if not isinstance(skills, list):
+                    skills = []
+                skills_list = [str(s).strip() for s in skills if str(s).strip()]
+
+                # 4. Create Team
+                team = TeamModel(
+                    name=name,
+                    visibility=visibility,
+                    description=description,
+                    competition_id=competition.id,
+                    user_id=user.id,
+                )
+                db.add(team)
+                await db.commit()
+                await db.refresh(team)
+
+                # 5. Create TeamRole
+                team_role = TeamRoleModel(user_id=user.id, team_id=team.id, role="LEAD")
+                db.add(team_role)
+
+                # 6. Create RequirementsTeam
+                req_team = RequirementsTeamModel(
+                    requirement=description, team_id=team.id
+                )
+                db.add(req_team)
+
+                # 7. Create SkillsTeam
+                for skill_name in skills_list:
+                    skill_team = SkillsTeamModel(name=skill_name, team_id=team.id)
+                    db.add(skill_team)
+
+                # 8. Create TeamCode if private
+                if not visibility:
+                    team_code_str = f"COBALT-{secrets.token_hex(5).upper()}"
+                    team_code = TeamCodeModel(code=team_code_str, team_id=team.id)
+                    db.add(team_code)
+
+                await db.commit()
+
+            logger.info(
+                f"Successfully saved TeamPaymentCreated to DB (team_id: {team.id}, competition_id: {competition_id})"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to save TeamPaymentCreated event to DB: {e}")
 
     async def _handle_competition_event(
         self, event_name: str, tx_hash: str, args: Dict[str, Any]
@@ -634,9 +1157,7 @@ class Web3Indexer:
 
             if event_name == "CompetitionPaymentConfigured":
                 raw_comp_id = args.get("competitionId")
-                competition_id = (
-                    str(raw_comp_id) if raw_comp_id is not None else ""
-                )
+                competition_id = str(raw_comp_id) if raw_comp_id is not None else ""
                 fee_token_address = _normalize_address(args.get("tokenAddress"))
                 raw_fee = args.get("fee")
                 fee = int(raw_fee) if raw_fee is not None else None
@@ -659,9 +1180,7 @@ class Web3Indexer:
 
             if event_name == "CompetitionWinnerConfigured":
                 raw_comp_id = args.get("competitionId")
-                competition_id = (
-                    str(raw_comp_id) if raw_comp_id is not None else ""
-                )
+                competition_id = str(raw_comp_id) if raw_comp_id is not None else ""
                 raw_winner_id = args.get("winnerId")
                 winner_id = int(raw_winner_id) if raw_winner_id is not None else 0
                 prize_token = str(args.get("prizeToken") or "")
@@ -695,30 +1214,27 @@ class Web3Indexer:
                 )
                 return
 
-            # CompetitionCreated adalah event datar (flat): semua field berada
-            # di level atas `args`, bukan nested di objek "competition".
-            comp = args
-            comp_cid = str(comp.get("cid") or "")
-            certificate_cid = str(
-                comp.get("certificateCID") or comp.get("certificate_cid") or ""
-            )
-            formation = str(comp.get("formation") or "")
-            wallet_address = str(
-                args.get("organization") or comp.get("organization") or ""
+            # CompetitionCreated event args: id, organization, cid, formation,
+            # prizeCertificateClaim, certificateCID, priceCompetitionFeeId
+            comp_cid = str(args.get("cid") or "")
+            certificate_cid = str(args.get("certificateCID") or "")
+            formation = str(args.get("formation") or "")
+            wallet_address = str(args.get("organization") or "")
+            competition_id = str(args.get("id") or "")
+
+            raw_fee_id = args.get("priceCompetitionFeeId")
+            price_competition_fee_id = (
+                int(raw_fee_id) if raw_fee_id is not None else None
             )
 
             ipfs_data = await self._fetch_from_ipfs(comp_cid) if comp_cid else {}
 
-            name = str(ipfs_data.get("name") or comp.get("name") or "")
-            category = str(ipfs_data.get("category") or comp.get("category") or "")
-            description = str(
-                ipfs_data.get("description") or comp.get("description") or ""
-            )
+            name = str(ipfs_data.get("name") or "")
+            category = str(ipfs_data.get("category") or "")
+            description = str(ipfs_data.get("description") or "")
             requirement = str(
                 ipfs_data.get("requirements")
                 or ipfs_data.get("requirement")
-                or comp.get("requirements")
-                or comp.get("requirement")
                 or ""
             )
             guidebook_cid = str(
@@ -726,19 +1242,13 @@ class Web3Indexer:
                 or ipfs_data.get("guideBookCid")
                 or ipfs_data.get("guidebook_cid")
                 or ipfs_data.get("guidebookCid")
-                or comp.get("guideBookCID")
-                or comp.get("cid")
-                or ""
+                or comp_cid
             )
 
             sched = (
                 ipfs_data.get("schedule")
                 if isinstance(ipfs_data.get("schedule"), dict)
-                else (
-                    comp.get("schedule")
-                    if isinstance(comp.get("schedule"), dict)
-                    else ipfs_data
-                )
+                else {}
             )
 
             registration_window = _parse_timestamp(
@@ -757,92 +1267,43 @@ class Web3Indexer:
                 sched.get("resultAnnouncement") or sched.get("result_announcement")
             )
             pirze_certificate_claim = _parse_timestamp(
-                comp.get("prizeCertificateClaim")
+                args.get("prizeCertificateClaim")
                 or sched.get("prizeCertificateClaim")
                 or sched.get("prize_certificate_claim")
             )
 
-            payment = (
-                comp.get("payment")
-                if isinstance(comp.get("payment"), dict)
-                else {}
-            )
-            fee_token_address = _normalize_address(payment.get("tokenAddress"))
-            raw_fee = payment.get("fee")
-            fee = int(raw_fee) if raw_fee is not None else None
-            if fee_token_address is None and not fee:
-                fee = None
-
-            raw_fee_id = args.get("priceCompetitionFeeId")
-            price_competition_fee_id = (
-                int(raw_fee_id) if raw_fee_id is not None else None
-            )
-
-            raw_comp_id = (
-                args.get("id")
-                if args.get("id") is not None
-                else (comp.get("id") if isinstance(comp, dict) else None)
-            )
-            competition_id = str(raw_comp_id or "")
-
-            raw_winners = (
-                args.get("winners") if isinstance(args.get("winners"), list) else []
-            )
+            # Event CompetitionCreated tidak membawa daftar winners on-chain (winner
+            # dikonfigurasi lewat CompetitionWinnerConfigured yang di-emit
+            # lebih dulu). Gunakan winners dari metadata IPFS agar title
+            # (mis. "1st Place") bisa diterapkan ke baris winner yang sudah
+            # ada, dicocokkan berdasarkan urutan.
             ipfs_winners = (
                 ipfs_data.get("winners")
                 if isinstance(ipfs_data.get("winners"), list)
                 else []
             )
 
-            # Event CompetitionCreated tidak membawa daftar winners (winner
-            # dikonfigurasi lewat CompetitionWinnerConfigured yang di-emit
-            # lebih dulu). Gunakan winners dari metadata IPFS agar title
-            # (mis. "1st Place") bisa diterapkan ke baris winner yang sudah
-            # ada, dicocokkan berdasarkan urutan.
-            if not raw_winners and ipfs_winners:
-                raw_winners = [
+            winners = []
+            for i, w in enumerate(ipfs_winners):
+                if not isinstance(w, dict):
+                    continue
+                w_title = w.get("title") or w.get("category")
+                w_cert_cid = w.get("certificateCID")
+                if not w_title and w_cert_cid:
+                    w_cert_meta = await self._fetch_from_ipfs(str(w_cert_cid))
+                    if isinstance(w_cert_meta, dict):
+                        w_title = (
+                            w_cert_meta.get("title")
+                            or w_cert_meta.get("name")
+                            or w_cert_meta.get("category")
+                        )
+                winners.append(
                     {
-                        "title": w.get("title"),
-                        "certificateCID": w.get("certificateCID"),
+                        "title": str(w_title or f"Winner #{i + 1}"),
+                        "certificateCID": str(w_cert_cid or ""),
                         "_from_metadata": True,
                     }
-                    for w in ipfs_winners
-                    if isinstance(w, dict)
-                ]
-
-            winners = []
-            for i, w in enumerate(raw_winners):
-                if isinstance(w, dict):
-                    w_item = dict(w)
-                    meta_w = (
-                        ipfs_winners[i]
-                        if i < len(ipfs_winners) and isinstance(ipfs_winners[i], dict)
-                        else {}
-                    )
-                    w_title = (
-                        w_item.get("title")
-                        or meta_w.get("title")
-                        or meta_w.get("category")
-                    )
-                    w_cert_cid = (
-                        w_item.get("certificateCID")
-                        or w_item.get("certificate_cid")
-                        or meta_w.get("certificateCID")
-                        or meta_w.get("certificate_cid")
-                    )
-                    if not w_title and w_cert_cid:
-                        w_cert_meta = await self._fetch_from_ipfs(str(w_cert_cid))
-                        if isinstance(w_cert_meta, dict):
-                            w_title = (
-                                w_cert_meta.get("title")
-                                or w_cert_meta.get("name")
-                                or w_cert_meta.get("category")
-                            )
-                    w_item["title"] = str(
-                        w_title
-                        or f"Winner #{w_item.get('id') or w_item.get('winnerId') or (i + 1)}"
-                    )
-                    winners.append(w_item)
+                )
 
             saved_comp = await CompetitionDatabases.add_competition(
                 wallet_address=wallet_address,
@@ -861,8 +1322,6 @@ class Web3Indexer:
                 certificate_cid=certificate_cid,
                 guidebook_cid=guidebook_cid,
                 competition_id=competition_id,
-                fee=fee,
-                fee_token_address=fee_token_address,
                 price_competition_fee_id=price_competition_fee_id,
                 winners=winners,
                 indexer_state_id=await self._resolve_indexer_state_id(),
@@ -883,56 +1342,32 @@ class Web3Indexer:
             "CompetitionPaymentConfigured",
             "CompetitionWinnerConfigured",
         ):
-            # CompetitionCreated adalah event datar (flat): semua field berada
-            # di level atas `args`, bukan nested di objek "competition".
-            comp = args
-            comp_cid = comp.get("cid") or ""
-            ipfs_data = await self._fetch_from_ipfs(comp_cid) if comp_cid else {}
-
-            competition_id = (
-                args.get("competitionId")
-                or args.get("id")
-                or comp.get("id")
-            )
+            competition_id = args.get("competitionId") or args.get("id")
             print(f"  🏆 Competition Event ({event_name}):")
             print(f"     Tx Hash:        {tx_hash}")
             print(f"     Competition ID: {competition_id}")
 
             if event_name == "CompetitionCreated":
+                comp_cid = str(args.get("cid") or "")
+                ipfs_data = await self._fetch_from_ipfs(comp_cid) if comp_cid else {}
                 sched = (
                     ipfs_data.get("schedule")
                     if isinstance(ipfs_data.get("schedule"), dict)
-                    else (
-                        comp.get("schedule")
-                        if isinstance(comp.get("schedule"), dict)
-                        else {}
-                    )
-                )
-                payment = (
-                    comp.get("payment")
-                    if isinstance(comp.get("payment"), dict)
                     else {}
                 )
+
+                print(f"     Creator Wallet (Org):    {args.get('organization')}")
                 print(
-                    f"     Creator Wallet (Org):    {args.get('organization') or comp.get('organization')}"
+                    f"     Price Competition Fee ID:{args.get('priceCompetitionFeeId')}"
                 )
-                print(f"     Price Competition Fee ID:{args.get('priceCompetitionFeeId')}")
-                print(f"     Payment Token Address:   {payment.get('tokenAddress')}")
-                print(f"     Payment Fee:             {payment.get('fee')}")
                 print(f"     Competition CID:         {comp_cid}")
+                print(f"     Name:                    {ipfs_data.get('name')}")
+                print(f"     Category:                {ipfs_data.get('category')}")
+                print(f"     Description:             {ipfs_data.get('description')}")
                 print(
-                    f"     Name:                    {ipfs_data.get('name') or comp.get('name')}"
+                    f"     Requirements:            {ipfs_data.get('requirements') or ipfs_data.get('requirement')}"
                 )
-                print(
-                    f"     Category:                {ipfs_data.get('category') or comp.get('category')}"
-                )
-                print(
-                    f"     Description:             {ipfs_data.get('description') or comp.get('description')}"
-                )
-                print(
-                    f"     Requirements:            {ipfs_data.get('requirements') or ipfs_data.get('requirement') or comp.get('requirements') or comp.get('requirement')}"
-                )
-                print(f"     Formation:               {comp.get('formation')}")
+                print(f"     Formation:               {args.get('formation')}")
                 print(f"     Schedule:")
                 print(
                     f"       Registration Window:   {sched.get('registrationWindow') or sched.get('registration_window')}"
@@ -950,11 +1385,11 @@ class Web3Indexer:
                     f"       Result Announcement:   {sched.get('resultAnnouncement') or sched.get('result_announcement')}"
                 )
                 print(
-                    f"       Prize Certificate Claim: {sched.get('prizeCertificateClaim') or comp.get('prizeCertificateClaim')}"
+                    f"       Prize Certificate Claim: {args.get('prizeCertificateClaim')}"
                 )
-                print(f"     Certificate CID:         {comp.get('certificateCID')}")
+                print(f"     Certificate CID:         {args.get('certificateCID')}")
                 print(
-                    f"     Guidebook CID:           {ipfs_data.get('guideBookCID') or comp.get('guideBookCID') or comp_cid}"
+                    f"     Guidebook CID:           {ipfs_data.get('guideBookCID') or ipfs_data.get('guidebook_cid') or comp_cid}"
                 )
 
             elif event_name == "CompetitionPaymentConfigured":
@@ -977,25 +1412,12 @@ class Web3Indexer:
             print(f"     Amount:         {args.get('amount')}")
 
         elif event_name == "WinnerSet":
-            cert_cid = str(args.get("certificateCID") or "")
-            title = cert_cid
-            if cert_cid:
-                cert_meta = await self._fetch_from_ipfs(cert_cid)
-                if isinstance(cert_meta, dict):
-                    title = str(
-                        cert_meta.get("title")
-                        or cert_meta.get("name")
-                        or cert_meta.get("category")
-                        or title
-                    )
-            participant_winner_id = args.get("winnerId")
             print(f"  🥇 Winner Set:")
             print(f"     Tx Hash:               {tx_hash}")
             print(f"     Winner ID:             {args.get('winnerId')}")
             print(f"     Participant:           {args.get('participant')}")
             print(f"     Competition ID:        {args.get('competitionId')}")
-            print(f"     Participant Winner ID: {participant_winner_id}")
-            print(f"     Title:                 {title}")
+            print(f"     Signature:             {args.get('signature')}")
 
         elif event_name == "ListingTokenAdded":
             print(f"  📌 ListingToken Added:")
@@ -1015,11 +1437,9 @@ class Web3Indexer:
             "PriceCompetitionFeeSet",
             "PriceCompetitionFeeUpdated",
         ):
-            cid = str(
-                args.get("cid") or args.get("title") or args.get("description") or ""
-            )
-            title = args.get("title") or cid
-            description = args.get("description") or cid
+            cid = str(args.get("cid") or "")
+            title = cid
+            description = cid
             if cid:
                 fee_meta = await self._fetch_from_ipfs(cid)
                 if isinstance(fee_meta, dict):
@@ -1092,10 +1512,15 @@ class Web3Indexer:
             print(f"     URI:            {args.get('uri')}")
 
         elif event_name == "TeamPaymentCreated":
+            cid = args.get("cid") or ""
+            ipfs_data = await self._fetch_from_ipfs(cid) if cid else {}
+
             print(f"  💸 Team Payment Created:")
             print(f"     Tx Hash:        {tx_hash}")
             print(f"     Competition ID: {args.get('competitionId')}")
-            print(f"     CID:            {args.get('cid')}")
+            print(f"     CID:            {cid}")
+            if ipfs_data:
+                print(f"     IPFS Data:      {json.dumps(ipfs_data)}")
             print(f"     Token:          {args.get('token')}")
             print(f"     From:           {args.get('from')}")
             print(f"     To:             {args.get('to')}")

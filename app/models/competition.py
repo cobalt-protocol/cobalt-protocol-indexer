@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.signature_certificate_winner import (
         SignatureCertificateWinnerModel,
     )
+    from app.models.signature_set_winner import SignatureSetWinnerModel
     from app.models.prize_deposited import PrizeDepositedModel
     from app.models.price_competition import PriceCompetitionModel
     from app.models.competition_fee_paid import CompetitionFeePaidModel
@@ -99,6 +100,9 @@ class CompetitionModel(SQLModel, table=True):
     )
     signature_certificate_winners: List["SignatureCertificateWinnerModel"] = (
         Relationship(back_populates="competition")
+    )
+    signature_set_winners: List["SignatureSetWinnerModel"] = Relationship(
+        back_populates="competition"
     )
     prize_deposits: List["PrizeDepositedModel"] = Relationship(
         back_populates="competition"

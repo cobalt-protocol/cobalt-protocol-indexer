@@ -18,6 +18,11 @@ if TYPE_CHECKING:
         SignatureCertificateParticipantModel,
     )
     from app.models.signature_certificate_winner import SignatureCertificateWinnerModel
+    from app.models.signature_set_winner import SignatureSetWinnerModel
+    from app.models.certificate_participant_minted import CertificateParticipantMintedModel
+    from app.models.certificate_participant_winner_minted import (
+        CertificateParticipantWinnerMintedModel,
+    )
 
 
 class TeamModel(SQLModel, table=True):
@@ -29,6 +34,7 @@ class TeamModel(SQLModel, table=True):
     description: str
     competition_id: str = Field(foreign_key="competition.id")
     user_id: str = Field(foreign_key="users.id")
+    tx_hash: Optional[str] = Field(default=None, index=True)
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
@@ -55,7 +61,7 @@ class TeamModel(SQLModel, table=True):
     requirements_team: Optional["RequirementsTeamModel"] = Relationship(
         back_populates="team"
     )
-    request_join: Optional["RequestJoinModel"] = Relationship(
+    request_joins: List["RequestJoinModel"] = Relationship(
         back_populates="team"
     )
     team_codes: List["TeamCodeModel"] = Relationship(back_populates="team")
@@ -69,3 +75,12 @@ class TeamModel(SQLModel, table=True):
     signature_certificate_winners: List["SignatureCertificateWinnerModel"] = (
         Relationship(back_populates="team")
     )
+    signature_set_winner: Optional["SignatureSetWinnerModel"] = Relationship(
+        back_populates="team"
+    )
+    certificate_participant_minteds: List["CertificateParticipantMintedModel"] = (
+        Relationship(back_populates="team")
+    )
+    certificate_participant_winner_minteds: List[
+        "CertificateParticipantWinnerMintedModel"
+    ] = Relationship(back_populates="team")

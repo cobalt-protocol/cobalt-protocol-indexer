@@ -39,4 +39,4 @@ class RequestJoinModel(SQLModel, table=True):
     )
 
     user: Optional["UserModel"] = Relationship(back_populates="request_joins")
-    team: Optional["TeamModel"] = Relationship(back_populates="request_join")
+    team: Optional["TeamModel"] = Relationship(back_populates="request_joins")

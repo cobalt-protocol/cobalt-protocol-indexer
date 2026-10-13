@@ -15,6 +15,7 @@ from .winner import WinnerModel
 from .nonce_connect import NonceConnectModel
 from .signature_certificate_participant import SignatureCertificateParticipantModel
 from .signature_certificate_winner import SignatureCertificateWinnerModel
+from .signature_set_winner import SignatureSetWinnerModel
 from .listing_token import ListingTokenModel
 from .prize_deposited import PrizeDepositedModel
 from .price_competition import PriceCompetitionModel
@@ -46,6 +47,7 @@ __all__ = [
     "NonceConnectModel",
     "SignatureCertificateParticipantModel",
     "SignatureCertificateWinnerModel",
+    "SignatureSetWinnerModel",
     "ListingTokenModel",
     "PrizeDepositedModel",
     "PriceCompetitionModel",

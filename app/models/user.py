@@ -18,8 +18,16 @@ if TYPE_CHECKING:
         SignatureCertificateParticipantModel,
     )
     from app.models.signature_certificate_winner import SignatureCertificateWinnerModel
+    from app.models.signature_set_winner import SignatureSetWinnerModel
     from app.models.competition import CompetitionModel
     from app.models.request_join import RequestJoinModel
+    from app.models.certificate_participant_minted import (
+        CertificateParticipantMintedModel,
+    )
+    from app.models.certificate_participant_winner_minted import (
+        CertificateParticipantWinnerMintedModel,
+    )
+    from app.models.participant_winner import ParticipantWinnerModel
 
 
 class UserModel(SQLModel, table=True):
@@ -67,7 +75,22 @@ class UserModel(SQLModel, table=True):
     signature_certificate_participants: List["SignatureCertificateParticipantModel"] = (
         Relationship(back_populates="user")
     )
-    signature_certificate_winners: List["SignatureCertificateWinnerModel"] = Relationship(
+    signature_certificate_winners: List["SignatureCertificateWinnerModel"] = (
+        Relationship(back_populates="user")
+    )
+    signature_set_winners: List["SignatureSetWinnerModel"] = Relationship(
         back_populates="user"
     )
     competitions: List["CompetitionModel"] = Relationship(back_populates="user")
+    certificate_participant_minteds: List["CertificateParticipantMintedModel"] = (
+        Relationship(back_populates="user")
+    )
+    certificate_participant_winner_minteds: List[
+        "CertificateParticipantWinnerMintedModel"
+    ] = Relationship(back_populates="user")
+    # 1:1 strict to participant_winner.participant -> users.wallet_address
+    # participant is @unique + FK to users.wallet_address (@unique), so one wallet has at most one row globally.
+    # Remove unique=True on ParticipantWinner.participant if N:1 is needed and change this to List.
+    participant_winner: Optional["ParticipantWinnerModel"] = Relationship(
+        back_populates="user"
+    )

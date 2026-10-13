@@ -1,11 +1,27 @@
 from typing import Optional
+from eth_utils import keccak
+from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.configs.database import AsyncSessionLocal
 from app.configs import settings
 from app.models.certificate_participant_minted import CertificateParticipantMintedModel
+from app.models.user import UserModel
+from app.models.team import TeamModel
 from app.databases.competition import CompetitionDatabases
+
+
+def _derive_numeric_team_id(team_id_str: str) -> int:
+    try:
+        n = int(str(team_id_str).strip())
+        if n > 0:
+            return n
+        raise ValueError("non-positive")
+    except Exception:
+        h = keccak(text=str(team_id_str))
+        n = int.from_bytes(h, "big")
+        return n if n != 0 else 1
 
 
 class CertificateParticipantMintedDatabases:
@@ -16,6 +32,8 @@ class CertificateParticipantMintedDatabases:
         participant: str,
         competition_id: str,
         uri: str,
+        team_id: Optional[int] = None,
+        raw_team_id: Optional[str] = None,
         chain_id: Optional[int] = None,
         indexer_state_id: Optional[str] = None,
         contract_name: str = "CompetitionManager",
@@ -34,6 +52,22 @@ class CertificateParticipantMintedDatabases:
                     db, contract_name=contract_name, chain_id=chain_id
                 )
 
+            # Resolve user_id from participant wallet (case-insensitive); create placeholder user if missing
+            resolved_user_id: Optional[str] = None
+            wallet = (participant or "").strip()
+            if wallet:
+                stmt = select(UserModel).where(
+                    func.lower(UserModel.wallet_address) == wallet.lower()
+                )
+                res = await db.exec(stmt)
+                user = res.first()
+                if not user:
+                    user = UserModel(wallet_address=wallet)
+                    db.add(user)
+                    await db.commit()
+                    await db.refresh(user)
+                resolved_user_id = user.id
+
             comp = await CompetitionDatabases.ensure_competition_exists(
                 db,
                 competition_id,
@@ -41,6 +75,59 @@ class CertificateParticipantMintedDatabases:
                 chain_id=chain_id,
                 indexer_state_id=resolved_state_id,
             )
+
+            # ── Resolve team_id FK (numeric on-chain teamId -> Team ULID) ──────────
+            resolved_team_id: Optional[str] = None
+            numeric_team_id: Optional[int] = None
+            if team_id is not None:
+                try:
+                    numeric_team_id = int(team_id)
+                except Exception:
+                    numeric_team_id = None
+            if numeric_team_id is None and raw_team_id is not None:
+                try:
+                    # raw_team_id may be ULID string or numeric string
+                    if str(raw_team_id).strip().isdigit():
+                        numeric_team_id = int(str(raw_team_id).strip())
+                    else:
+                        # direct ULID lookup
+                        stmt_direct = select(TeamModel).where(TeamModel.id == str(raw_team_id).strip())
+                        r_direct = await db.exec(stmt_direct)
+                        first_direct = r_direct.first()
+                        direct_team = first_direct[0] if isinstance(first_direct, (tuple, list)) else first_direct
+                        if direct_team is not None:
+                            resolved_team_id = getattr(direct_team, "id", None)
+                except Exception:
+                    pass
+            if resolved_team_id is None and numeric_team_id is not None and numeric_team_id != 0:
+                try:
+                    stmt_team = select(TeamModel).where(TeamModel.competition_id == comp.id)
+                    res_team = await db.exec(stmt_team)
+                    rows = res_team.all()
+                    for row in rows:
+                        t = row[0] if isinstance(row, (tuple, list)) else row
+                        if t is None:
+                            continue
+                        tid_str = getattr(t, "id", "") or ""
+                        try:
+                            derived = _derive_numeric_team_id(tid_str)
+                            if derived == numeric_team_id:
+                                resolved_team_id = tid_str
+                                break
+                        except Exception:
+                            continue
+                    # fallback: if team ULID is numeric string and equals numeric_team_id
+                    if resolved_team_id is None:
+                        for row in rows:
+                            t = row[0] if isinstance(row, (tuple, list)) else row
+                            if t is None:
+                                continue
+                            tid_str = getattr(t, "id", "") or ""
+                            if tid_str.isdigit() and int(tid_str) == numeric_team_id:
+                                resolved_team_id = tid_str
+                                break
+                except Exception:
+                    pass
 
             statement = select(CertificateParticipantMintedModel).where(
                 CertificateParticipantMintedModel.token_id == token_id,
@@ -51,10 +138,13 @@ class CertificateParticipantMintedDatabases:
 
             if existing:
                 existing.tx_hash = tx_hash
-                existing.participant = participant
                 existing.competition_id = comp.id
                 existing.uri = uri
                 existing.indexer_state_id = resolved_state_id
+                if resolved_user_id is not None:
+                    existing.user_id = resolved_user_id
+                if resolved_team_id is not None:
+                    existing.team_id = resolved_team_id
                 db.add(existing)
                 await db.commit()
                 await db.refresh(existing)
@@ -63,9 +153,10 @@ class CertificateParticipantMintedDatabases:
             record = CertificateParticipantMintedModel(
                 tx_hash=tx_hash,
                 token_id=token_id,
-                participant=participant,
                 competition_id=comp.id,
+                team_id=resolved_team_id,
                 uri=uri,
+                user_id=resolved_user_id,
                 indexer_state_id=resolved_state_id,
             )
             db.add(record)

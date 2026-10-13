@@ -23,6 +23,8 @@ if TYPE_CHECKING:
         SignatureCertificateParticipantModel,
     )
     from app.models.signature_certificate_winner import SignatureCertificateWinnerModel
+    from app.models.signature_set_winner import SignatureSetWinnerModel
+    from app.models.nonce_connect import NonceConnectModel
 
 
 class IndexerStateModel(SQLModel, table=True):
@@ -86,5 +88,11 @@ class IndexerStateModel(SQLModel, table=True):
     )
     signature_certificate_winners: List["SignatureCertificateWinnerModel"] = (
         Relationship(back_populates="indexer_state")
+    )
+    signature_set_winners: List["SignatureSetWinnerModel"] = Relationship(
+        back_populates="indexer_state"
+    )
+    nonce_connects: List["NonceConnectModel"] = Relationship(
+        back_populates="indexer_state"
     )
 

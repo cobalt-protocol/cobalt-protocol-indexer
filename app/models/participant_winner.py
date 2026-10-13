@@ -8,6 +8,8 @@ from app.utils import generate_ulid
 if TYPE_CHECKING:
     from app.models.competition import CompetitionModel
     from app.models.indexer_state import IndexerStateModel
+    from app.models.prize_winner import PrizeWinnerModel
+    from app.models.user import UserModel
 
 
 class ParticipantWinnerModel(SQLModel, table=True):
@@ -15,11 +17,25 @@ class ParticipantWinnerModel(SQLModel, table=True):
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     tx_hash: str
-    winner_id: int = Field(sa_type=BigInteger)
-    participant: str
-    participant_winner_id: int = Field(sa_type=BigInteger)
+    # FK 1:1 to users.wallet_address — each row references exactly one user.
+    # wallet_address is @unique in users, so it can be FK target.
+    # STRICT 1:1: participant is @unique — one wallet may have at most ONE participant_winner row globally.
+    # If you need N:1 (one wallet may win multiple competitions/winnerIds), remove unique=True
+    # and change User.participant_winner to List[ParticipantWinnerModel].
+    participant: str = Field(
+        foreign_key="users.wallet_address",
+        unique=True,
+        index=True,
+        nullable=False,
+    )
     title: str
     competition_id: str = Field(foreign_key="competition.id")
+    # Direct FK to prize_winner.winner_id (BigInt, global UNIQUE uint256 on-chain).
+    # This is the logical 1:N join; no separate winner_id column needed.
+    # prize_winner.winner_id has UniqueConstraint so it can be referenced.
+    prize_winner_id: Optional[int] = Field(
+        default=None, sa_type=BigInteger, foreign_key="prize_winner.winner_id", index=True
+    )
     indexer_state_id: Optional[str] = Field(
         default=None, foreign_key="indexer_state.id"
     )
@@ -50,4 +66,9 @@ class ParticipantWinnerModel(SQLModel, table=True):
     indexer_state: Optional["IndexerStateModel"] = Relationship(
         back_populates="participant_winners"
     )
+    prize_winner: Optional["PrizeWinnerModel"] = Relationship(
+        back_populates="participant_winners"
+    )
+    # 1:1 to users via wallet_address — each row references exactly one user.
+    user: Optional["UserModel"] = Relationship(back_populates="participant_winner")
 

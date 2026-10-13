@@ -7,6 +7,7 @@ from app.utils import generate_ulid
 
 if TYPE_CHECKING:
     from app.models.user import UserModel
+    from app.models.indexer_state import IndexerStateModel
 
 
 class NonceConnectModel(SQLModel, table=True):
@@ -16,6 +17,9 @@ class NonceConnectModel(SQLModel, table=True):
     nonce: str = Field(unique=True)
 
     user_id: str = Field(foreign_key="users.id", unique=True)
+    indexer_state_id: Optional[str] = Field(
+        default=None, foreign_key="indexer_state.id"
+    )
 
     created_at: Optional[datetime] = Field(
         default=None,
@@ -38,4 +42,7 @@ class NonceConnectModel(SQLModel, table=True):
     )
 
     user: Optional["UserModel"] = Relationship(back_populates="nonce_connect")
+    indexer_state: Optional["IndexerStateModel"] = Relationship(
+        back_populates="nonce_connects"
+    )
 
