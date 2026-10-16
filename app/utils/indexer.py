@@ -586,7 +586,9 @@ class Web3Indexer:
                             title = str(prize_winner.category)
                         # keep prize_winner_id as winner_id (BigInt) — FK to prize_winner.winner_id
                         try:
-                            prize_winner_id = int(getattr(prize_winner, "winner_id", winner_id))
+                            prize_winner_id = int(
+                                getattr(prize_winner, "winner_id", winner_id)
+                            )
                         except Exception:
                             prize_winner_id = winner_id
             except Exception as db_e:
@@ -628,81 +630,67 @@ class Web3Indexer:
             # URI example: ipfs://QmZhYcERutv3RBU57x2s1CgkHESpL6McmzZc6aWWZXyA2q
             # CID extracted -> fetch via Kubo (_fetch_from_ipfs) -> JSON must contain team_id
             # team_id from IPFS is ULID of team table, used as FK for certificate_participant_minted.team_id
+            # ── Resolve team_id: Prioritaskan on-chain args.get("teamId") (ULID dari smart contract) ──
+            onchain_team_id_arg = args.get("teamId")
+            onchain_team_id: Optional[str] = (
+                str(onchain_team_id_arg).strip()
+                if onchain_team_id_arg is not None
+                and str(onchain_team_id_arg).strip() != ""
+                else None
+            )
+
+            # Fallback jika on-chain teamId kosong: resolve via IPFS uri (ipfs://<CID>)
             ipfs_team_id: Optional[str] = None
-            if uri:
+            if not onchain_team_id and uri:
                 cid_raw = uri.strip()
                 if cid_raw.startswith("ipfs://"):
                     cid_raw = cid_raw[7:]
-                # handle possible ipfs://CID/path or CID with query
                 cid_raw = cid_raw.split("/")[0].split("?")[0].strip()
                 if cid_raw:
                     try:
                         ipfs_data = await self._fetch_from_ipfs(cid_raw)
                         if isinstance(ipfs_data, dict) and ipfs_data:
-                            # primary keys from buildParticipantCertificateMetadata (api/src/common/utils/ipfs.util.ts)
                             candidate = (
                                 ipfs_data.get("team_id")
                                 or ipfs_data.get("teamId")
                                 or ipfs_data.get("teamID")
                                 or ipfs_data.get("team")
                             )
-                            # sometimes nested under 'data'
                             if candidate is None and isinstance(
                                 ipfs_data.get("data"), dict
                             ):
-                                candidate = ipfs_data["data"].get(
-                                    "team_id"
-                                ) or ipfs_data["data"].get("teamId")
+                                candidate = (
+                                    ipfs_data["data"].get("team_id")
+                                    or ipfs_data["data"].get("teamId")
+                                    or ipfs_data["data"].get("team")
+                                )
+
+                            # Jika candidate bertipe dict (misal {id: "...", name: "..."}), ekstrak ID-nya
+                            if isinstance(candidate, dict):
+                                candidate = (
+                                    candidate.get("id")
+                                    or candidate.get("team_id")
+                                    or candidate.get("teamId")
+                                )
+
                             if candidate is not None and str(candidate).strip():
                                 ipfs_team_id = str(candidate).strip()
                                 logger.info(
                                     f"Resolved team_id={ipfs_team_id} from IPFS uri={uri} (CID={cid_raw}) for CertificateParticipantMinted token_id={token_id}"
                                 )
-                            else:
-                                logger.warning(
-                                    f"IPFS data for CID {cid_raw} (uri={uri}) has no team_id field. Keys: {list(ipfs_data.keys())} | preview: {str(ipfs_data)[:500]}"
-                                )
-                        else:
-                            logger.warning(
-                                f"IPFS fetch for CID {cid_raw} (uri={uri}) returned empty or non-dict: {ipfs_data}"
-                            )
                     except Exception as e:
                         logger.warning(
                             f"Failed to fetch team_id from IPFS CID {cid_raw} (uri={uri}): {e}",
                             exc_info=True,
                         )
-                else:
-                    logger.warning(
-                        f"CertificateParticipantMinted uri is present but CID empty after stripping ipfs:// prefix: {uri}"
-                    )
 
-            # Fallback / final resolution: IPFS team_id (ULID) takes priority, else on-chain numeric teamId
-            raw_team_id: Optional[str] = None
+            raw_team_id: Optional[str] = onchain_team_id or ipfs_team_id
             team_id_int: Optional[int] = None
-            if ipfs_team_id:
-                raw_team_id = ipfs_team_id
-                # if raw_team_id is numeric string, also set team_id_int for helper's numeric path; else keep None for direct ULID lookup
+            if raw_team_id and raw_team_id.isdigit():
                 try:
-                    if raw_team_id.isdigit():
-                        team_id_int = int(raw_team_id)
+                    team_id_int = int(raw_team_id)
                 except Exception:
                     team_id_int = None
-            else:
-                # fallback to on-chain args (legacy)
-                raw_team_id_candidate = args.get("teamId")
-                if (
-                    raw_team_id_candidate is not None
-                    and str(raw_team_id_candidate).strip() != ""
-                ):
-                    raw_team_id = str(raw_team_id_candidate).strip()
-                    try:
-                        team_id_int = int(raw_team_id)
-                    except Exception:
-                        team_id_int = None
-                if uri:
-                    logger.warning(
-                        f"CertificateParticipantMinted token_id={token_id} using fallback on-chain teamId={raw_team_id} (IPFS team_id not found for uri={uri})"
-                    )
 
             indexer_state_id = await self._resolve_indexer_state_id()
             saved = await CertificateParticipantMintedDatabases.add_certificate_participant_minted(
@@ -1060,9 +1048,21 @@ class Web3Indexer:
 
             indexer_state_id = await self._resolve_indexer_state_id()
 
-            ipfs_data = await self._fetch_from_ipfs(cid) if cid else {}
-
             async with AsyncSessionLocal() as db:
+                # 0. Anti double insert check by tx_hash (idempotency early exit)
+                stmt_existing = select(TeamModel).where(TeamModel.tx_hash == tx_hash)
+                res_existing = await db.exec(stmt_existing)
+                existing_team = res_existing.first()
+                if existing_team:
+                    if isinstance(existing_team, (tuple, list)):
+                        existing_team = existing_team[0]
+                    logger.info(
+                        f"Team already created for tx_hash={tx_hash} (team_id: {existing_team.id}), skipping duplicate insert."
+                    )
+                    return
+
+                ipfs_data = await self._fetch_from_ipfs(cid) if cid else {}
+
                 # 1. User
                 wallet_lower = wallet_address.lower()
                 stmt_user = select(UserModel).where(
@@ -1094,7 +1094,35 @@ class Web3Indexer:
                 elif isinstance(competition, (tuple, list)):
                     competition = competition[0]
 
-                # 3. Process IPFS data
+                # 3. Check if team was already created for this user & competition (via API or previous event)
+                stmt_existing_user_team = select(TeamModel).where(
+                    TeamModel.competition_id == competition.id,
+                    (TeamModel.user_id == user.id)
+                    | (
+                        TeamModel.id.in_(
+                            select(TeamRoleModel.team_id).where(
+                                TeamRoleModel.user_id == user.id
+                            )
+                        )
+                    ),
+                    TeamModel.deleted_at.is_(None),
+                )
+                res_user_team = await db.exec(stmt_existing_user_team)
+                existing_user_team = res_user_team.first()
+                if existing_user_team:
+                    if isinstance(existing_user_team, (tuple, list)):
+                        existing_user_team = existing_user_team[0]
+                    if not existing_user_team.tx_hash or existing_user_team.tx_hash != tx_hash:
+                        existing_user_team.tx_hash = tx_hash
+                        db.add(existing_user_team)
+                        await db.commit()
+                        await db.refresh(existing_user_team)
+                    logger.info(
+                        f"Successfully linked tx_hash={tx_hash} to existing team (team_id: {existing_user_team.id}), prevented duplicate team insert."
+                    )
+                    return
+
+                # 4. Process IPFS data
                 name = str(ipfs_data.get("name") or "").strip()
                 if not name:
                     name = f"Team {secrets.token_hex(3).upper()}"
@@ -1107,13 +1135,14 @@ class Web3Indexer:
                     skills = []
                 skills_list = [str(s).strip() for s in skills if str(s).strip()]
 
-                # 4. Create Team
+                # 5. Create Team with tx_hash
                 team = TeamModel(
                     name=name,
                     visibility=visibility,
                     description=description,
                     competition_id=competition.id,
                     user_id=user.id,
+                    tx_hash=tx_hash,
                 )
                 db.add(team)
                 await db.commit()
@@ -1233,9 +1262,7 @@ class Web3Indexer:
             category = str(ipfs_data.get("category") or "")
             description = str(ipfs_data.get("description") or "")
             requirement = str(
-                ipfs_data.get("requirements")
-                or ipfs_data.get("requirement")
-                or ""
+                ipfs_data.get("requirements") or ipfs_data.get("requirement") or ""
             )
             guidebook_cid = str(
                 ipfs_data.get("guideBookCID")

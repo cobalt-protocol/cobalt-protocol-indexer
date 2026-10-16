@@ -49,18 +49,20 @@ class ParticipantWinnerDatabases:
 
             # Ensure User exists for FK participant -> users.wallet_address (1:1 strict, @unique)
             # Normalize wallet for lookup (lower-case compare) but store as-is from event (checksummed)
-            wallet = (participant or "").strip()
-            if not wallet:
-                raise ValueError("participant wallet_address is empty — FK to users.wallet_address requires non-empty value")
+            target_participant = (participant or "").strip()
+            if not target_participant:
+                raise ValueError(
+                    "participant wallet_address is empty — FK to users.wallet_address requires non-empty value"
+                )
             # case-insensitive lookup (wallet_address uniqueness is logically case-insensitive for EVM)
             stmt_user = select(UserModel).where(
-                func.lower(UserModel.wallet_address) == wallet.lower()
+                func.lower(UserModel.wallet_address) == target_participant.lower()
             )
             res_user = await db.exec(stmt_user)
             _u_first = res_user.first()
             _user = _u_first[0] if isinstance(_u_first, (tuple, list)) else _u_first
             if _user is None:
-                _user = UserModel(wallet_address=wallet)
+                _user = UserModel(wallet_address=target_participant)
                 db.add(_user)
                 await db.flush()  # ensure FK target exists before inserting participant_winner
                 # handle race: if flush fails due to concurrent insert, reload
@@ -70,26 +72,32 @@ class ParticipantWinnerDatabases:
                     res_retry = await db.exec(stmt_user)
                     _r = res_retry.first()
                     _user = _r[0] if isinstance(_r, (tuple, list)) else _r
-            # Keep participant exactly as users.wallet_address value (use canonical stored value if differ by case)
+            # Keep target_participant exactly as users.wallet_address value (use canonical stored value if differ by case)
             # Prefer stored lower-cased compare: keep event string but ensure it matches existing user's wallet_address case
             # If existing user's wallet_address differs in case, use stored value for FK consistency
             try:
                 if _user is not None and getattr(_user, "wallet_address", None):
                     # if event wallet differs only by case, align to stored wallet_address for FK
-                    if str(_user.wallet_address).lower() == wallet.lower() and str(_user.wallet_address) != wallet:
-                        participant = str(_user.wallet_address)
+                    if (
+                        str(_user.wallet_address).lower() == target_participant.lower()
+                        and str(_user.wallet_address) != target_participant
+                    ):
+                        target_participant = str(_user.wallet_address)
             except Exception:
                 pass
 
             # Normalize: winner_id is deprecated alias for prize_winner_id (uint256 -> prize_winner.winner_id @unique)
-            if prize_winner_id is None and winner_id is not None:
-                prize_winner_id = winner_id
+            candidate_prize_winner_id = (
+                prize_winner_id if prize_winner_id is not None else winner_id
+            )
             resolved_prize_winner_id: Optional[int] = None
-            if prize_winner_id is not None:
+            if candidate_prize_winner_id is not None:
                 try:
-                    resolved_prize_winner_id = int(prize_winner_id)
+                    resolved_prize_winner_id = int(candidate_prize_winner_id)
                 except Exception:
-                    resolved_prize_winner_id = prize_winner_id  # type: ignore
+                    resolved_prize_winner_id = candidate_prize_winner_id  # type: ignore
+
+            resolved_title = title or ""
 
             # Optional verify prize_winner exists (global UNIQUE winner_id); keep title fallback if needed
             if resolved_prize_winner_id is not None:
@@ -101,14 +109,12 @@ class ParticipantWinnerDatabases:
                     )
                     pw_res = await db.exec(pw_stmt)
                     _first = pw_res.first()
-                    _pw = (
-                        _first[0] if isinstance(_first, (tuple, list)) else _first
-                    )
+                    _pw = _first[0] if isinstance(_first, (tuple, list)) else _first
                     # if not found, keep resolved value — FK will enforce if DB has constraint
-                    if _pw is not None and not title:
+                    if _pw is not None and not resolved_title:
                         try:
                             if getattr(_pw, "category", None):
-                                title = str(_pw.category)
+                                resolved_title = str(_pw.category)
                         except Exception:
                             pass
                 except Exception:
@@ -120,18 +126,16 @@ class ParticipantWinnerDatabases:
                 # No winner FK — dedup on participant+competition+chain only
                 statement = select(ParticipantWinnerModel).where(
                     ParticipantWinnerModel.prize_winner_id.is_(None),  # type: ignore
-                    ParticipantWinnerModel.participant == participant.lower()
-                    if participant
-                    else ParticipantWinnerModel.participant == participant,
+                    func.lower(ParticipantWinnerModel.participant)
+                    == target_participant.lower(),
                     ParticipantWinnerModel.competition_id == comp.id,
                     ParticipantWinnerModel.indexer_state_id == resolved_state_id,
                 )
             else:
                 statement = select(ParticipantWinnerModel).where(
                     ParticipantWinnerModel.prize_winner_id == resolved_prize_winner_id,
-                    ParticipantWinnerModel.participant == participant.lower()
-                    if participant
-                    else ParticipantWinnerModel.participant == participant,
+                    func.lower(ParticipantWinnerModel.participant)
+                    == target_participant.lower(),
                     ParticipantWinnerModel.competition_id == comp.id,
                     ParticipantWinnerModel.indexer_state_id == resolved_state_id,
                 )
@@ -145,8 +149,8 @@ class ParticipantWinnerDatabases:
 
             if existing:
                 existing.tx_hash = tx_hash
-                existing.participant = participant
-                existing.title = title
+                existing.participant = target_participant
+                existing.title = resolved_title
                 if resolved_prize_winner_id is not None:
                     existing.prize_winner_id = resolved_prize_winner_id
                 existing.indexer_state_id = resolved_state_id
@@ -157,9 +161,9 @@ class ParticipantWinnerDatabases:
 
             participant_winner = ParticipantWinnerModel(
                 tx_hash=tx_hash,
-                participant=participant,
+                participant=target_participant,
                 competition_id=comp.id,
-                title=title,
+                title=resolved_title,
                 prize_winner_id=resolved_prize_winner_id,
                 indexer_state_id=resolved_state_id,
             )

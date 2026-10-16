@@ -129,6 +129,39 @@ class CertificateParticipantMintedDatabases:
                 except Exception:
                     pass
 
+            if resolved_team_id is None and resolved_user_id and comp and getattr(comp, "id", None):
+                try:
+                    stmt_fallback = select(TeamModel).where(
+                        TeamModel.competition_id == comp.id,
+                        TeamModel.user_id == resolved_user_id,
+                    )
+                    r_fb = await db.exec(stmt_fallback)
+                    f_fb = r_fb.first()
+                    t_fb = f_fb[0] if isinstance(f_fb, (tuple, list)) else f_fb
+                    if t_fb is not None:
+                        resolved_team_id = getattr(t_fb, "id", None)
+                    else:
+                        from app.models.team_role import TeamRoleModel
+                        stmt_tr = select(TeamRoleModel).where(
+                            TeamRoleModel.user_id == resolved_user_id
+                        )
+                        r_tr = await db.exec(stmt_tr)
+                        for tr_row in r_tr.all():
+                            tr = tr_row[0] if isinstance(tr_row, (tuple, list)) else tr_row
+                            if tr and getattr(tr, "team_id", None):
+                                stmt_team_chk = select(TeamModel).where(
+                                    TeamModel.id == tr.team_id,
+                                    TeamModel.competition_id == comp.id,
+                                )
+                                r_chk = await db.exec(stmt_team_chk)
+                                f_chk = r_chk.first()
+                                if f_chk:
+                                    t_chk = f_chk[0] if isinstance(f_chk, (tuple, list)) else f_chk
+                                    resolved_team_id = getattr(t_chk, "id", None)
+                                    break
+                except Exception:
+                    pass
+
             statement = select(CertificateParticipantMintedModel).where(
                 CertificateParticipantMintedModel.token_id == token_id,
                 CertificateParticipantMintedModel.indexer_state_id == resolved_state_id,
