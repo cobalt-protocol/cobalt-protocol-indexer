@@ -31,6 +31,18 @@ def create_db_and_tables() -> None:
 
     SQLModel.metadata.create_all(sync_engine)
 
+    # Ensure participant_winner.participant is not unique (allow multiple participant_winner per participant)
+    try:
+        from sqlalchemy import text
+        with sync_engine.connect() as conn:
+            conn.execute(text("DROP INDEX IF EXISTS ix_participant_winner_participant;"))
+            conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS ix_participant_winner_participant;"))
+            conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS participant_winner_participant_key;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_participant_winner_participant ON participant_winner (participant);"))
+            conn.commit()
+    except Exception:
+        pass
+
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:

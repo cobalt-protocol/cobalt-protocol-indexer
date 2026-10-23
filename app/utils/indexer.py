@@ -110,21 +110,28 @@ class Web3Indexer:
         self.last_updated_at: Dict[str, str] = {}
         self._ipfs_cache: Dict[str, Dict[str, Any]] = {}
 
-    async def _resolve_indexer_state_id(self) -> str:
+    async def _resolve_indexer_state_id(
+        self, contract_address: Optional[str] = None
+    ) -> str:
         """Resolve chain_id via indexer_state.id (proper FK).
 
         Semua child table (competition, listing_token, dst) tidak lagi
         menyimpan `chain_id` mentah. Chain di-query via relasi
         `indexer_state.id` -> `indexer_state.chain_id`.
         Helper ini fetch/create baris `indexer_state` untuk
-        (contract_name="CompetitionManager", chain_id=settings.chain_id)
+        (contract_address=..., chain_id=settings.chain_id)
         dan kembalikan PK `id` (ULID) untuk dipakai sebagai FK
         `indexer_state_id` saat insert.
         """
         from app.databases.indexer_state import IndexerStateDatabases
 
+        addr = (
+            contract_address
+            or settings.competition_contract
+            or ""
+        )
         return await IndexerStateDatabases.get_or_create_indexer_state_id(
-            contract_name="CompetitionManager",
+            contract_address=addr,
             chain_id=settings.chain_id,
         )
 
@@ -289,15 +296,20 @@ class Web3Indexer:
     async def _index_contract(self, cfg: Dict[str, Any], latest_block: int):
         name = cfg["name"]
         address = cfg["address"]
+        contract_addr = (
+            settings.competition_contract
+            or address
+            or ""
+        )
 
         if name not in self.last_scanned_blocks:
             db_block = await IndexerStateDatabases.get_last_scanned_block(
-                name, chain_id=settings.chain_id
+                contract_address=contract_addr, chain_id=settings.chain_id
             )
             if db_block is not None:
                 self.last_scanned_blocks[name] = db_block
                 logger.info(
-                    f"Restored last_scanned_block for {name} from DB: {db_block}"
+                    f"Restored last_scanned_block for {name} ({contract_addr}) from DB: {db_block}"
                 )
             elif settings.web3_start_block is not None:
                 from_block = settings.web3_start_block
@@ -328,7 +340,9 @@ class Web3Indexer:
             self.last_scanned_blocks[name] = to_block
             self.last_updated_at[name] = datetime.now(timezone.utc).isoformat()
             await IndexerStateDatabases.set_last_scanned_block(
-                name, to_block, chain_id=settings.chain_id
+                contract_address=contract_addr,
+                last_scanned_block=to_block,
+                chain_id=settings.chain_id,
             )
 
         except Exception as e:
@@ -372,43 +386,71 @@ class Web3Indexer:
 
             await self._print_event_details(event_name, cleaned_args, tx_hash)
 
+            contract_addr = (
+                settings.competition_contract
+                or address
+            )
+
             if event_name in (
                 "CompetitionCreated",
                 "CompetitionPaymentConfigured",
                 "CompetitionWinnerConfigured",
             ):
-                await self._handle_competition_event(event_name, tx_hash, cleaned_args)
+                await self._handle_competition_event(
+                    event_name, tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name == "CompetitionFeePaid":
-                await self._handle_competition_fee_paid(tx_hash, cleaned_args)
+                await self._handle_competition_fee_paid(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name == "WinnerSet":
-                await self._handle_winner_set(tx_hash, cleaned_args)
+                await self._handle_winner_set(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name in (
                 "ListingTokenAdded",
                 "ListingTokenDeactivated",
             ):
-                await self._handle_listing_token_added(tx_hash, cleaned_args)
+                await self._handle_listing_token_added(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name == "PrizeDeposited":
-                await self._handle_prize_deposited(tx_hash, cleaned_args)
+                await self._handle_prize_deposited(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name == "PrizeDistributed":
-                await self._handle_prize_distributed(tx_hash, cleaned_args)
+                await self._handle_prize_distributed(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name in (
                 "PriceCompetitionFeeSet",
                 "PriceCompetitionFeeUpdated",
             ):
-                await self._handle_price_competition_fee_set(tx_hash, cleaned_args)
+                await self._handle_price_competition_fee_set(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name == "CertificateParticipantMinted":
-                await self._handle_certificate_participant_minted(tx_hash, cleaned_args)
+                await self._handle_certificate_participant_minted(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
             elif event_name == "CertificateParticipantWinnerMinted":
                 await self._handle_certificate_participant_winner_minted(
-                    tx_hash, cleaned_args
+                    tx_hash, cleaned_args, contract_address=contract_addr
                 )
             elif event_name == "TeamPaymentCreated":
-                await self._handle_team_payment_created(tx_hash, cleaned_args)
+                await self._handle_team_payment_created(
+                    tx_hash, cleaned_args, contract_address=contract_addr
+                )
 
         except Exception as e:
             logger.error(f"Error processing log {tx_hash}:{log_index}: {e}")
 
-    async def _handle_listing_token_added(self, tx_hash: str, args: Dict[str, Any]):
+    async def _handle_listing_token_added(
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
+    ):
         try:
             from app.databases.listing_token import ListingTokenDatabases
 
@@ -416,7 +458,9 @@ class Web3Indexer:
             token_address = str(args.get("tokenAddress") or "")
             is_active = bool(args.get("isActive", True))
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
             saved = await ListingTokenDatabases.add_listing_token(
                 tx_hash=tx_hash,
                 listing_token_id=listing_token_id,
@@ -430,7 +474,12 @@ class Web3Indexer:
         except Exception as e:
             logger.error(f"Failed to save ListingToken event to DB: {e}")
 
-    async def _handle_prize_deposited(self, tx_hash: str, args: Dict[str, Any]):
+    async def _handle_prize_deposited(
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
+    ):
         try:
             from app.databases.prize_deposited import PrizeDepositedDatabases
 
@@ -440,7 +489,9 @@ class Web3Indexer:
             sender = str(args.get("sender") or "")
             amount = int(args.get("amount") or 0)
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
             saved = await PrizeDepositedDatabases.add_prize_deposited(
                 tx_hash=tx_hash,
                 treasury_prize_id=treasury_prize_id,
@@ -456,7 +507,12 @@ class Web3Indexer:
         except Exception as e:
             logger.error(f"Failed to save PrizeDeposited event to DB: {e}")
 
-    async def _handle_prize_distributed(self, tx_hash: str, args: Dict[str, Any]):
+    async def _handle_prize_distributed(
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
+    ):
         try:
             from app.databases.prize_distributed import (
                 PrizeDistributedDatabases,
@@ -468,7 +524,9 @@ class Web3Indexer:
             recipient = str(args.get("recipient") or "")
             amount = int(args.get("amount") or 0)
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
             saved = await PrizeDistributedDatabases.add_prize_distributed(
                 tx_hash=tx_hash,
                 treasury_prize_id=treasury_prize_id,
@@ -485,7 +543,10 @@ class Web3Indexer:
             logger.error(f"Failed to save PrizeDistributed event to DB: {e}")
 
     async def _handle_price_competition_fee_set(
-        self, tx_hash: str, args: Dict[str, Any]
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
     ):
         try:
             from app.databases.price_competition import PriceCompetitionDatabases
@@ -504,7 +565,9 @@ class Web3Indexer:
                     title = str(fee_meta.get("name") or fee_meta.get("title") or title)
                     description = str(fee_meta.get("description") or description)
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
             saved = await PriceCompetitionDatabases.add_price_competition(
                 tx_hash=tx_hash,
                 price_competition_fee_id=price_competition_fee_id,
@@ -520,7 +583,12 @@ class Web3Indexer:
         except Exception as e:
             logger.error(f"Failed to save PriceCompetitionFeeSet event to DB: {e}")
 
-    async def _handle_competition_fee_paid(self, tx_hash: str, args: Dict[str, Any]):
+    async def _handle_competition_fee_paid(
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
+    ):
         try:
             from app.databases.competition_fee_paid import (
                 CompetitionFeePaidDatabases,
@@ -531,7 +599,9 @@ class Web3Indexer:
             token_address = str(args.get("tokenAddress") or "")
             amount = int(args.get("amount") or 0)
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
             saved = await CompetitionFeePaidDatabases.add_competition_fee_paid(
                 tx_hash=tx_hash,
                 competition_id=competition_id,
@@ -546,7 +616,12 @@ class Web3Indexer:
         except Exception as e:
             logger.error(f"Failed to save CompetitionFeePaid event to DB: {e}")
 
-    async def _handle_winner_set(self, tx_hash: str, args: Dict[str, Any]):
+    async def _handle_winner_set(
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
+    ):
         try:
             from app.databases.participant_winner import ParticipantWinnerDatabases
             from app.configs.database import AsyncSessionLocal
@@ -562,7 +637,9 @@ class Web3Indexer:
             # prize_winner_id is BigInt FK -> prize_winner.winner_id (global @unique)
             # No separate winner_id column on participant_winner; winner_id == prize_winner_id
             prize_winner_id: int | None = winner_id if winner_id else None
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
 
             try:
                 async with AsyncSessionLocal() as db:
@@ -610,11 +687,42 @@ class Web3Indexer:
             logger.info(
                 f"Successfully saved ParticipantWinner to DB with ULID: {saved.id} (prize_winner_id(BigInt FK->prize_winner.winner_id): {prize_winner_id})"
             )
+
+            # After successful insert, delete the matching signature from signature_set_winner
+            signature = args.get("signature")
+            if isinstance(signature, (bytes, bytearray)):
+                signature = "0x" + bytes(signature).hex()
+            signature = str(signature or "").strip()
+            if signature:
+                try:
+                    from sqlalchemy import delete, func
+                    from app.models.signature_set_winner import (
+                        SignatureSetWinnerModel,
+                    )
+
+                    async with AsyncSessionLocal() as db:
+                        result = await db.exec(
+                            delete(SignatureSetWinnerModel).where(
+                                func.lower(SignatureSetWinnerModel.signature)
+                                == signature.lower()
+                            )
+                        )
+                        await db.commit()
+                        logger.info(
+                            f"Deleted {result.rowcount} signature_set_winner row(s) for signature {signature[:12]}..."
+                        )
+                except Exception as del_e:
+                    logger.error(
+                        f"Failed to delete signature_set_winner after WinnerSet: {del_e}"
+                    )
         except Exception as e:
             logger.error(f"Failed to save WinnerSet event to DB: {e}")
 
     async def _handle_certificate_participant_minted(
-        self, tx_hash: str, args: Dict[str, Any]
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
     ):
         try:
             from app.databases.certificate_participant_minted import (
@@ -692,7 +800,9 @@ class Web3Indexer:
                 except Exception:
                     team_id_int = None
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
             saved = await CertificateParticipantMintedDatabases.add_certificate_participant_minted(
                 tx_hash=tx_hash,
                 token_id=token_id,
@@ -849,7 +959,10 @@ class Web3Indexer:
             )
 
     async def _handle_certificate_participant_winner_minted(
-        self, tx_hash: str, args: Dict[str, Any]
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
     ):
         try:
             from app.databases.certificate_participant_winner_minted import (
@@ -869,7 +982,9 @@ class Web3Indexer:
             except Exception:
                 team_id_int_w = None
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
             saved = await CertificateParticipantWinnerMintedDatabases.add_certificate_participant_winner_minted(
                 tx_hash=tx_hash,
                 token_id=token_id,
@@ -1025,7 +1140,12 @@ class Web3Indexer:
                 f"Failed to save CertificateParticipantWinnerMinted event to DB: {e}"
             )
 
-    async def _handle_team_payment_created(self, tx_hash: str, args: Dict[str, Any]):
+    async def _handle_team_payment_created(
+        self,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
+    ):
         try:
             from app.configs.database import AsyncSessionLocal
             from sqlmodel import select
@@ -1046,7 +1166,9 @@ class Web3Indexer:
                 logger.warning("Missing 'from' address in TeamPaymentCreated event")
                 return
 
-            indexer_state_id = await self._resolve_indexer_state_id()
+            indexer_state_id = await self._resolve_indexer_state_id(
+                contract_address=contract_address
+            )
 
             async with AsyncSessionLocal() as db:
                 # 0. Anti double insert check by tx_hash (idempotency early exit)
@@ -1179,7 +1301,11 @@ class Web3Indexer:
             logger.error(f"Failed to save TeamPaymentCreated event to DB: {e}")
 
     async def _handle_competition_event(
-        self, event_name: str, tx_hash: str, args: Dict[str, Any]
+        self,
+        event_name: str,
+        tx_hash: str,
+        args: Dict[str, Any],
+        contract_address: Optional[str] = None,
     ):
         try:
             from app.databases.competition import CompetitionDatabases
@@ -1194,7 +1320,9 @@ class Web3Indexer:
                 if fee_token_address is None and not fee:
                     fee = None
 
-                indexer_state_id = await self._resolve_indexer_state_id()
+                indexer_state_id = await self._resolve_indexer_state_id(
+                    contract_address=contract_address
+                )
                 await CompetitionDatabases.update_competition_payment(
                     competition_id=competition_id,
                     fee_token_address=fee_token_address,
@@ -1228,7 +1356,9 @@ class Web3Indexer:
                             or ""
                         )
 
-                indexer_state_id = await self._resolve_indexer_state_id()
+                indexer_state_id = await self._resolve_indexer_state_id(
+                    contract_address=contract_address
+                )
                 await CompetitionDatabases.configure_competition_winner(
                     competition_id=competition_id,
                     winner_id=winner_id,
@@ -1351,7 +1481,9 @@ class Web3Indexer:
                 competition_id=competition_id,
                 price_competition_fee_id=price_competition_fee_id,
                 winners=winners,
-                indexer_state_id=await self._resolve_indexer_state_id(),
+                indexer_state_id=await self._resolve_indexer_state_id(
+                    contract_address=contract_address
+                ),
             )
             logger.info(
                 f"Successfully saved Competition to DB with ULID: {saved_comp.id} (competition_id: {saved_comp.competition_id}, tx: {tx_hash})"

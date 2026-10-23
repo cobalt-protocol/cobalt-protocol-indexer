@@ -88,9 +88,7 @@ class UserModel(SQLModel, table=True):
     certificate_participant_winner_minteds: List[
         "CertificateParticipantWinnerMintedModel"
     ] = Relationship(back_populates="user")
-    # 1:1 strict to participant_winner.participant -> users.wallet_address
-    # participant is @unique + FK to users.wallet_address (@unique), so one wallet has at most one row globally.
-    # Remove unique=True on ParticipantWinner.participant if N:1 is needed and change this to List.
-    participant_winner: Optional["ParticipantWinnerModel"] = Relationship(
+    # 1:N to participant_winner.participant -> users.wallet_address
+    participant_winners: List["ParticipantWinnerModel"] = Relationship(
         back_populates="user"
     )

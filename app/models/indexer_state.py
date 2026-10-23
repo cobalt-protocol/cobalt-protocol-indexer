@@ -29,10 +29,10 @@ if TYPE_CHECKING:
 
 class IndexerStateModel(SQLModel, table=True):
     __tablename__ = "indexer_state"
-    __table_args__ = (UniqueConstraint("contract_name", "chain_id"),)
+    __table_args__ = (UniqueConstraint("contract_address", "chain_id"),)
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    contract_name: str = Field(index=True)
+    contract_address: str = Field(index=True)
     chain_id: int
     last_scanned_block: int
     created_at: Optional[datetime] = Field(

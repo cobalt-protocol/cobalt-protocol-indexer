@@ -17,14 +17,11 @@ class ParticipantWinnerModel(SQLModel, table=True):
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     tx_hash: str
-    # FK 1:1 to users.wallet_address — each row references exactly one user.
+    # FK 1:N to users.wallet_address — each row references the winning user.
     # wallet_address is @unique in users, so it can be FK target.
-    # STRICT 1:1: participant is @unique — one wallet may have at most ONE participant_winner row globally.
-    # If you need N:1 (one wallet may win multiple competitions/winnerIds), remove unique=True
-    # and change User.participant_winner to List[ParticipantWinnerModel].
+    # One wallet may win multiple competitions/categories.
     participant: str = Field(
         foreign_key="users.wallet_address",
-        unique=True,
         index=True,
         nullable=False,
     )
@@ -69,6 +66,6 @@ class ParticipantWinnerModel(SQLModel, table=True):
     prize_winner: Optional["PrizeWinnerModel"] = Relationship(
         back_populates="participant_winners"
     )
-    # 1:1 to users via wallet_address — each row references exactly one user.
-    user: Optional["UserModel"] = Relationship(back_populates="participant_winner")
+    # 1:N from users via wallet_address — each row references the winning user.
+    user: Optional["UserModel"] = Relationship(back_populates="participant_winners")
 

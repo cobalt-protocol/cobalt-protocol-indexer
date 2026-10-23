@@ -16,18 +16,7 @@ class Settings(BaseSettings):
         default=8000, ge=1, le=65535, description="Listen port, env: PORT"
     )
 
-    certificate_competition_contract: str | None = None
     competition_contract: str | None = None
-    treasury_platform_contract: str | None = None
-    treasury_prize_contract: str | None = None
-    listing_token_prize_contract: str | None = None
-    price_competition_manager_contract: str | None = None
-    prize_competition_manager_contract: str | None = None
-    fee_manager_contract: str | None = None
-    fee_manager_competition_contract: str | None = None
-    signer_manager_contract: str | None = None
-    signer_manager_certificate_contract: str | None = None
-    certificate_manager_contract: str | None = None
 
     chain_id: int = 968
 
@@ -83,4 +72,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
