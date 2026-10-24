@@ -17,6 +17,7 @@ class ParticipantWinnerDatabases:
         competition_id: str,
         title: str,
         prize_winner_id: Optional[int] = None,
+        team_id: Optional[str] = None,
         # deprecated alias: winner_id == prize_winner_id (uint256 PrizeWinner.winner_id, global UNIQUE)
         winner_id: Optional[int] = None,
         chain_id: Optional[int] = None,
@@ -99,13 +100,33 @@ class ParticipantWinnerDatabases:
 
             resolved_title = title or ""
 
+            resolved_team_id: Optional[str] = None
+            raw_team = (team_id or "").strip()
+            if raw_team:
+                try:
+                    from app.models.team import TeamModel
+
+                    t_stmt = select(TeamModel).where(TeamModel.id == raw_team)
+                    t_res = await db.exec(t_stmt)
+                    _t_first = t_res.first()
+                    _team = (
+                        _t_first[0]
+                        if isinstance(_t_first, (tuple, list))
+                        else _t_first
+                    )
+                    if _team is not None:
+                        resolved_team_id = str(_team.id)
+                except Exception:
+                    resolved_team_id = None
+
             # Optional verify prize_winner exists (global UNIQUE winner_id); keep title fallback if needed
             if resolved_prize_winner_id is not None:
                 try:
                     from app.models.prize_winner import PrizeWinnerModel
 
                     pw_stmt = select(PrizeWinnerModel).where(
-                        PrizeWinnerModel.winner_id == resolved_prize_winner_id
+                        PrizeWinnerModel.competition_id == comp.id,
+                        PrizeWinnerModel.winner_id == resolved_prize_winner_id,
                     )
                     pw_res = await db.exec(pw_stmt)
                     _first = pw_res.first()
@@ -153,6 +174,8 @@ class ParticipantWinnerDatabases:
                 existing.title = resolved_title
                 if resolved_prize_winner_id is not None:
                     existing.prize_winner_id = resolved_prize_winner_id
+                if resolved_team_id is not None:
+                    existing.team_id = resolved_team_id
                 existing.indexer_state_id = resolved_state_id
                 db.add(existing)
                 await db.commit()
@@ -163,6 +186,7 @@ class ParticipantWinnerDatabases:
                 tx_hash=tx_hash,
                 participant=target_participant,
                 competition_id=comp.id,
+                team_id=resolved_team_id,
                 title=resolved_title,
                 prize_winner_id=resolved_prize_winner_id,
                 indexer_state_id=resolved_state_id,

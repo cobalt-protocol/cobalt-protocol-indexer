@@ -16,6 +16,12 @@ if TYPE_CHECKING:
         SignatureCertificateWinnerModel,
     )
     from app.models.signature_set_winner import SignatureSetWinnerModel
+    from app.models.signature_create_competition import (
+        SignatureCreateCompetitionModel,
+    )
+    from app.models.signature_team_payment import (
+        SignatureTeamPaymentModel,
+    )
     from app.models.prize_deposited import PrizeDepositedModel
     from app.models.price_competition import PriceCompetitionModel
     from app.models.competition_fee_paid import CompetitionFeePaidModel
@@ -104,6 +110,12 @@ class CompetitionModel(SQLModel, table=True):
     signature_set_winners: List["SignatureSetWinnerModel"] = Relationship(
         back_populates="competition"
     )
+    signature_create_competitions: List["SignatureCreateCompetitionModel"] = (
+        Relationship(back_populates="competition")
+    )
+    signature_team_payments: List["SignatureTeamPaymentModel"] = Relationship(
+        back_populates="competition"
+    )
     prize_deposits: List["PrizeDepositedModel"] = Relationship(
         back_populates="competition"
     )
@@ -114,7 +126,8 @@ class CompetitionModel(SQLModel, table=True):
         back_populates="competition"
     )
     participant_winners: List["ParticipantWinnerModel"] = Relationship(
-        back_populates="competition"
+        back_populates="competition",
+        sa_relationship_kwargs={"overlaps": "participant_winners,prize_winner"},
     )
     prize_distributions: List["PrizeDistributedModel"] = Relationship(
         back_populates="competition"

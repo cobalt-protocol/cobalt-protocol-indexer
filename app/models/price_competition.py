@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
-from sqlalchemy import Column, DateTime, BigInteger, Numeric
+from sqlalchemy import Column, DateTime, BigInteger, Numeric, UniqueConstraint
 from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
@@ -12,10 +12,19 @@ if TYPE_CHECKING:
 
 class PriceCompetitionModel(SQLModel, table=True):
     __tablename__ = "price_competition"
+    __table_args__ = (
+        # Fee id is only unique per deployed contract (indexer_state),
+        # a redeployed contract restarts its counter from 1.
+        UniqueConstraint(
+            "price_competition_fee_id",
+            "indexer_state_id",
+            name="uq_price_competition_fee_id_indexer_state",
+        ),
+    )
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     tx_hash: str
-    price_competition_fee_id: int = Field(unique=True, sa_type=BigInteger)
+    price_competition_fee_id: int = Field(sa_type=BigInteger)
     treasury_fee: int = Field(sa_type=Numeric(78, 0))
     token_address: str
     title: str

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     )
     from app.models.signature_certificate_winner import SignatureCertificateWinnerModel
     from app.models.signature_set_winner import SignatureSetWinnerModel
+    from app.models.signature_team_payment import SignatureTeamPaymentModel
     from app.models.competition import CompetitionModel
     from app.models.request_join import RequestJoinModel
     from app.models.certificate_participant_minted import (
@@ -79,6 +80,9 @@ class UserModel(SQLModel, table=True):
         Relationship(back_populates="user")
     )
     signature_set_winners: List["SignatureSetWinnerModel"] = Relationship(
+        back_populates="user"
+    )
+    signature_team_payments: List["SignatureTeamPaymentModel"] = Relationship(
         back_populates="user"
     )
     competitions: List["CompetitionModel"] = Relationship(back_populates="user")

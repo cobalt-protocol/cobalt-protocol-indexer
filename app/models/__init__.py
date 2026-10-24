@@ -16,6 +16,8 @@ from .nonce_connect import NonceConnectModel
 from .signature_certificate_participant import SignatureCertificateParticipantModel
 from .signature_certificate_winner import SignatureCertificateWinnerModel
 from .signature_set_winner import SignatureSetWinnerModel
+from .signature_create_competition import SignatureCreateCompetitionModel
+from .signature_team_payment import SignatureTeamPaymentModel
 from .listing_token import ListingTokenModel
 from .prize_deposited import PrizeDepositedModel
 from .price_competition import PriceCompetitionModel
@@ -48,6 +50,8 @@ __all__ = [
     "SignatureCertificateParticipantModel",
     "SignatureCertificateWinnerModel",
     "SignatureSetWinnerModel",
+    "SignatureCreateCompetitionModel",
+    "SignatureTeamPaymentModel",
     "ListingTokenModel",
     "PrizeDepositedModel",
     "PriceCompetitionModel",

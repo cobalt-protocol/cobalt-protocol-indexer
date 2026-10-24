@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from app.models.certificate_participant_winner_minted import (
         CertificateParticipantWinnerMintedModel,
     )
+    from app.models.participant_winner import ParticipantWinnerModel
 
 
 class TeamModel(SQLModel, table=True):
@@ -84,3 +85,6 @@ class TeamModel(SQLModel, table=True):
     certificate_participant_winner_minteds: List[
         "CertificateParticipantWinnerMintedModel"
     ] = Relationship(back_populates="team")
+    participant_winner: Optional["ParticipantWinnerModel"] = Relationship(
+        back_populates="team"
+    )

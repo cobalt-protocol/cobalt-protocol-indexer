@@ -24,6 +24,12 @@ if TYPE_CHECKING:
     )
     from app.models.signature_certificate_winner import SignatureCertificateWinnerModel
     from app.models.signature_set_winner import SignatureSetWinnerModel
+    from app.models.signature_create_competition import (
+        SignatureCreateCompetitionModel,
+    )
+    from app.models.signature_team_payment import (
+        SignatureTeamPaymentModel,
+    )
     from app.models.nonce_connect import NonceConnectModel
 
 
@@ -90,6 +96,12 @@ class IndexerStateModel(SQLModel, table=True):
         Relationship(back_populates="indexer_state")
     )
     signature_set_winners: List["SignatureSetWinnerModel"] = Relationship(
+        back_populates="indexer_state"
+    )
+    signature_create_competitions: List["SignatureCreateCompetitionModel"] = (
+        Relationship(back_populates="indexer_state")
+    )
+    signature_team_payments: List["SignatureTeamPaymentModel"] = Relationship(
         back_populates="indexer_state"
     )
     nonce_connects: List["NonceConnectModel"] = Relationship(

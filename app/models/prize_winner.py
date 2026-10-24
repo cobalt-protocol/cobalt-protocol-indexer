@@ -14,14 +14,18 @@ if TYPE_CHECKING:
 class PrizeWinnerModel(SQLModel, table=True):
     __tablename__ = "prize_winner"
     __table_args__ = (
-        UniqueConstraint("winner_id", name="uq_prize_winner_winner_id"),
+        # winner_id is a per-contract counter (restarts at 1 on redeploy),
+        # so it is only unique within one competition.
+        UniqueConstraint(
+            "competition_id", "winner_id", name="uq_prize_winner_competition_winner"
+        ),
     )
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    # winner_id is global UNIQUE (uint256 on-chain) so it can be referenced
-    # directly by participant_winner.prize_winner_id
+    # on-chain winnerId (uint256), unique per competition (see __table_args__);
+    # referenced by participant_winner via composite FK (competition_id, winner_id)
     winner_id: int = Field(
-        sa_type=BigInteger, unique=True, index=True, nullable=False
+        sa_type=BigInteger, index=True, nullable=False
     )
     category: str
     amount: int = Field(sa_type=Numeric(78, 0))
@@ -52,7 +56,8 @@ class PrizeWinnerModel(SQLModel, table=True):
     )
     winner: Optional["WinnerModel"] = Relationship(back_populates="prize_winner")
     participant_winners: List["ParticipantWinnerModel"] = Relationship(
-        back_populates="prize_winner"
+        back_populates="prize_winner",
+        sa_relationship_kwargs={"overlaps": "competition,participant_winners"},
     )
 
 

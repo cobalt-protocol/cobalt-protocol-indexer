@@ -31,7 +31,6 @@ IGNORED_EVENTS = {
     "BatchMetadataUpdate",
     "MetadataUpdate",
     "OwnershipTransferred",
-    "OwnerUpdated",
     "Transfer",
 }
 
@@ -422,6 +421,10 @@ class Web3Indexer:
                 await self._handle_prize_distributed(
                     tx_hash, cleaned_args, contract_address=contract_addr
                 )
+            elif event_name == "PrizesDistributed":
+                logger.info(
+                    f"PrizesDistributed event processed (competitionId={cleaned_args.get('competitionId')}, totalWinners={cleaned_args.get('totalWinners')})"
+                )
             elif event_name in (
                 "PriceCompetitionFeeSet",
                 "PriceCompetitionFeeUpdated",
@@ -440,6 +443,18 @@ class Web3Indexer:
             elif event_name == "TeamPaymentCreated":
                 await self._handle_team_payment_created(
                     tx_hash, cleaned_args, contract_address=contract_addr
+                )
+            elif event_name == "TeamPaymentWithdrawn":
+                logger.info(
+                    f"TeamPaymentWithdrawn event processed (competitionId={cleaned_args.get('competitionId')}, token={cleaned_args.get('token')}, to={cleaned_args.get('to')}, amount={cleaned_args.get('amount')})"
+                )
+            elif event_name == "TreasuryAdded":
+                logger.info(
+                    f"TreasuryAdded event processed (tokenAddress={cleaned_args.get('tokenAddress')}, sender={cleaned_args.get('sender')}, amount={cleaned_args.get('amount')})"
+                )
+            elif event_name == "NativeReceived":
+                logger.info(
+                    f"NativeReceived event processed (sender={cleaned_args.get('sender')}, amount={cleaned_args.get('amount')})"
                 )
 
         except Exception as e:
@@ -632,6 +647,7 @@ class Web3Indexer:
             winner_id = int(args.get("winnerId") or 0)
             participant = str(args.get("participant") or "")
             competition_id = str(args.get("competitionId") or "")
+            team_id = str(args.get("teamId") or "")
 
             title = ""
             # prize_winner_id is BigInt FK -> prize_winner.winner_id (global @unique)
@@ -649,8 +665,9 @@ class Web3Indexer:
                         tx_hash,
                         indexer_state_id=indexer_state_id,
                     )
-                    # winner_id is globally UNIQUE on prize_winner, so lookup by winner_id only
+                    # winner_id is only unique per competition (counter restarts per contract)
                     stmt = select(PrizeWinnerModel).where(
+                        PrizeWinnerModel.competition_id == comp.id,
                         PrizeWinnerModel.winner_id == winner_id,
                     )
                     res = await db.exec(stmt)
@@ -682,6 +699,7 @@ class Web3Indexer:
                 competition_id=competition_id,
                 title=title,
                 prize_winner_id=prize_winner_id,
+                team_id=team_id,
                 indexer_state_id=indexer_state_id,
             )
             logger.info(
@@ -1161,7 +1179,15 @@ class Web3Indexer:
 
             competition_id = str(args.get("competitionId") or "")
             cid = str(args.get("cid") or "")
+            token = str(args.get("token") or "")
             wallet_address = str(args.get("from") or "")
+            to_address = str(args.get("to") or "")
+            amount = int(args.get("amount") or 0)
+            signature = args.get("signature")
+            if isinstance(signature, (bytes, bytearray)):
+                signature = "0x" + bytes(signature).hex()
+            signature = str(signature or "").strip()
+
             if not wallet_address:
                 logger.warning("Missing 'from' address in TeamPaymentCreated event")
                 return
@@ -1239,6 +1265,19 @@ class Web3Indexer:
                         db.add(existing_user_team)
                         await db.commit()
                         await db.refresh(existing_user_team)
+                    if signature:
+                        from sqlalchemy import delete
+                        from app.models.signature_team_payment import (
+                            SignatureTeamPaymentModel,
+                        )
+
+                        await db.exec(
+                            delete(SignatureTeamPaymentModel).where(
+                                func.lower(SignatureTeamPaymentModel.signature)
+                                == signature.lower()
+                            )
+                        )
+                        await db.commit()
                     logger.info(
                         f"Successfully linked tx_hash={tx_hash} to existing team (team_id: {existing_user_team.id}), prevented duplicate team insert."
                     )
@@ -1294,8 +1333,31 @@ class Web3Indexer:
                 await db.commit()
 
             logger.info(
-                f"Successfully saved TeamPaymentCreated to DB (team_id: {team.id}, competition_id: {competition_id})"
+                f"Successfully saved TeamPaymentCreated to DB (team_id: {team.id}, competition_id: {competition_id}, token: {token}, to: {to_address}, amount: {amount})"
             )
+
+            if signature:
+                try:
+                    from sqlalchemy import delete
+                    from app.models.signature_team_payment import (
+                        SignatureTeamPaymentModel,
+                    )
+
+                    async with AsyncSessionLocal() as db:
+                        result = await db.exec(
+                            delete(SignatureTeamPaymentModel).where(
+                                func.lower(SignatureTeamPaymentModel.signature)
+                                == signature.lower()
+                            )
+                        )
+                        await db.commit()
+                        logger.info(
+                            f"Deleted {result.rowcount} signature_team_payment row(s) for signature {signature[:12]}..."
+                        )
+                except Exception as del_e:
+                    logger.error(
+                        f"Failed to delete signature_team_payment after TeamPaymentCreated: {del_e}"
+                    )
 
         except Exception as e:
             logger.error(f"Failed to save TeamPaymentCreated event to DB: {e}")
@@ -1374,12 +1436,13 @@ class Web3Indexer:
                 return
 
             # CompetitionCreated event args: id, organization, cid, formation,
-            # prizeCertificateClaim, certificateCID, priceCompetitionFeeId
+            # prizeCertificateClaim, certificateCID, priceCompetitionFeeId, signature
             comp_cid = str(args.get("cid") or "")
             certificate_cid = str(args.get("certificateCID") or "")
             formation = str(args.get("formation") or "")
             wallet_address = str(args.get("organization") or "")
             competition_id = str(args.get("id") or "")
+            signature = str(args.get("signature") or "")
 
             raw_fee_id = args.get("priceCompetitionFeeId")
             price_competition_fee_id = (
@@ -1488,6 +1551,30 @@ class Web3Indexer:
             logger.info(
                 f"Successfully saved Competition to DB with ULID: {saved_comp.id} (competition_id: {saved_comp.competition_id}, tx: {tx_hash})"
             )
+
+            if signature:
+                try:
+                    from sqlalchemy import delete, func
+                    from app.configs.database import AsyncSessionLocal
+                    from app.models.signature_create_competition import (
+                        SignatureCreateCompetitionModel,
+                    )
+
+                    async with AsyncSessionLocal() as db:
+                        result = await db.exec(
+                            delete(SignatureCreateCompetitionModel).where(
+                                func.lower(SignatureCreateCompetitionModel.signature)
+                                == signature.lower()
+                            )
+                        )
+                        await db.commit()
+                        logger.info(
+                            f"Deleted {result.rowcount} signature_create_competition row(s) for signature {signature[:12]}..."
+                        )
+                except Exception as del_e:
+                    logger.error(
+                        f"Failed to delete signature_create_competition after CompetitionCreated: {del_e}"
+                    )
         except Exception as e:
             logger.error(
                 f"Failed to save {event_name} event to DB (tx: {tx_hash}): {e}"
@@ -1550,6 +1637,7 @@ class Web3Indexer:
                 print(
                     f"     Guidebook CID:           {ipfs_data.get('guideBookCID') or ipfs_data.get('guidebook_cid') or comp_cid}"
                 )
+                print(f"     Signature:               {args.get('signature')}")
 
             elif event_name == "CompetitionPaymentConfigured":
                 print(f"     Token Address:  {args.get('tokenAddress')}")
@@ -1560,7 +1648,6 @@ class Web3Indexer:
                 print(f"     Prize Token:     {args.get('prizeToken')}")
                 print(f"     Prize Amount:    {args.get('prizeAmount')}")
                 print(f"     Certificate CID: {args.get('certificateCID')}")
-                print(f"     Team ID:         {args.get('teamId')}")
 
         elif event_name == "CompetitionFeePaid":
             print(f"  💳 Competition Fee Paid:")
@@ -1576,7 +1663,22 @@ class Web3Indexer:
             print(f"     Winner ID:             {args.get('winnerId')}")
             print(f"     Participant:           {args.get('participant')}")
             print(f"     Competition ID:        {args.get('competitionId')}")
+            print(f"     Team ID:               {args.get('teamId')}")
             print(f"     Signature:             {args.get('signature')}")
+
+        elif event_name == "PrizesDistributed":
+            print(f"  🎊 Prizes Distributed (All):")
+            print(f"     Tx Hash:               {tx_hash}")
+            print(f"     Competition ID:        {args.get('competitionId')}")
+            print(f"     Total Winners:         {args.get('totalWinners')}")
+
+        elif event_name == "TeamPaymentWithdrawn":
+            print(f"  🏧 Team Payment Withdrawn:")
+            print(f"     Tx Hash:               {tx_hash}")
+            print(f"     Competition ID:        {args.get('competitionId')}")
+            print(f"     Token:                 {args.get('token')}")
+            print(f"     To:                    {args.get('to')}")
+            print(f"     Amount:                {args.get('amount')}")
 
         elif event_name == "ListingTokenAdded":
             print(f"  📌 ListingToken Added:")
@@ -1612,11 +1714,6 @@ class Web3Indexer:
             print(f"     Token Address: {args.get('tokenAddress')}")
             print(f"     Title:         {title}")
             print(f"     Description:   {description}")
-
-        elif event_name == "SignerAddressUpdated":
-            print(f"  ✍️  Signer Address Updated:")
-            print(f"     Tx Hash:        {tx_hash}")
-            print(f"     Signer Address: {args.get('signerAddress')}")
 
         elif event_name == "TreasuryAdded":
             print(f"  🏦 Treasury Added:")
@@ -1684,6 +1781,7 @@ class Web3Indexer:
             print(f"     From:           {args.get('from')}")
             print(f"     To:             {args.get('to')}")
             print(f"     Amount:         {args.get('amount')}")
+            print(f"     Signature:      {args.get('signature')}")
 
         print()
 
