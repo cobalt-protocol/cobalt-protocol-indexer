@@ -31,7 +31,7 @@ def create_db_and_tables() -> None:
 
     SQLModel.metadata.create_all(sync_engine)
 
-    # Ensure participant_winner.participant is not unique (allow multiple participant_winner per participant)
+    # Ensure participant_winner.participant and team_id are not unique (allow multiple participant_winner per participant and per team)
     try:
         from sqlalchemy import text
         with sync_engine.connect() as conn:
@@ -39,6 +39,11 @@ def create_db_and_tables() -> None:
             conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS ix_participant_winner_participant;"))
             conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS participant_winner_participant_key;"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_participant_winner_participant ON participant_winner (participant);"))
+
+            conn.execute(text("DROP INDEX IF EXISTS ix_participant_winner_team_id;"))
+            conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS ix_participant_winner_team_id;"))
+            conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS participant_winner_team_id_key;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_participant_winner_team_id ON participant_winner (team_id);"))
             conn.commit()
     except Exception:
         pass

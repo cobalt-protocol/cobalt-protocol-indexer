@@ -85,6 +85,6 @@ class TeamModel(SQLModel, table=True):
     certificate_participant_winner_minteds: List[
         "CertificateParticipantWinnerMintedModel"
     ] = Relationship(back_populates="team")
-    participant_winner: Optional["ParticipantWinnerModel"] = Relationship(
+    participant_winners: List["ParticipantWinnerModel"] = Relationship(
         back_populates="team"
     )

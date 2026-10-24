@@ -36,7 +36,7 @@ class ParticipantWinnerModel(SQLModel, table=True):
     title: str
     competition_id: str = Field(foreign_key="competition.id")
     team_id: Optional[str] = Field(
-        default=None, unique=True, foreign_key="team.id", index=True
+        default=None, foreign_key="team.id", index=True
     )
     # On-chain winnerId (BigInt). Composite FK (competition_id, prize_winner_id)
     # -> prize_winner(competition_id, winner_id), see __table_args__.
@@ -71,7 +71,7 @@ class ParticipantWinnerModel(SQLModel, table=True):
         back_populates="participant_winners",
         sa_relationship_kwargs={"overlaps": "participant_winners,prize_winner"},
     )
-    team: Optional["TeamModel"] = Relationship(back_populates="participant_winner")
+    team: Optional["TeamModel"] = Relationship(back_populates="participant_winners")
     indexer_state: Optional["IndexerStateModel"] = Relationship(
         back_populates="participant_winners"
     )
