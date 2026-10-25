@@ -29,6 +29,15 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 def create_db_and_tables() -> None:
     import app.models  # noqa: F401
 
+    try:
+        from sqlalchemy import text
+
+        with sync_engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            conn.commit()
+    except Exception:
+        pass
+
     SQLModel.metadata.create_all(sync_engine)
 
     # Ensure participant_winner.participant and team_id are not unique (allow multiple participant_winner per participant and per team)

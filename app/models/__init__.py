@@ -30,6 +30,7 @@ from .certificate_participant_winner_minted import (
 )
 from .submission_project import SubmissionProjectModel
 from .indexer_state import IndexerStateModel
+from .recomendation_team import RecomendationTeamModel
 
 __all__ = [
     "UserModel",
@@ -62,4 +63,5 @@ __all__ = [
     "CertificateParticipantWinnerMintedModel",
     "SubmissionProjectModel",
     "IndexerStateModel",
+    "RecomendationTeamModel",
 ]

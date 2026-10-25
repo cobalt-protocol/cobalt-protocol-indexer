@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         CertificateParticipantWinnerMintedModel,
     )
     from app.models.participant_winner import ParticipantWinnerModel
+    from app.models.recomendation_team import RecomendationTeamModel
 
 
 class UserModel(SQLModel, table=True):
@@ -94,5 +95,8 @@ class UserModel(SQLModel, table=True):
     ] = Relationship(back_populates="user")
     # 1:N to participant_winner.participant -> users.wallet_address
     participant_winners: List["ParticipantWinnerModel"] = Relationship(
+        back_populates="user"
+    )
+    recomendation_team: Optional["RecomendationTeamModel"] = Relationship(
         back_populates="user"
     )
