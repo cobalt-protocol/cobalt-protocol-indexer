@@ -61,12 +61,24 @@ class CompetitionDatabases:
             )
             result = await db.exec(statement)
             comp = result.first()
+            if not comp:
+                stmt_fallback = select(CompetitionModel).where(
+                    (CompetitionModel.competition_id == competition_id)
+                    | (CompetitionModel.id == competition_id)
+                )
+                res_fallback = await db.exec(stmt_fallback)
+                comp = res_fallback.first()
+
             if comp:
-                if not getattr(comp, "indexer_state_id", None):
+                if isinstance(comp, (tuple, list)):
+                    comp = comp[0]
+                if competition_id and not comp.competition_id:
+                    comp.competition_id = competition_id
+                if indexer_state_id and getattr(comp, "indexer_state_id", None) != indexer_state_id:
                     comp.indexer_state_id = indexer_state_id
-                    db.add(comp)
-                    await db.commit()
-                    await db.refresh(comp)
+                db.add(comp)
+                await db.commit()
+                await db.refresh(comp)
                 return comp
 
         now = datetime.now()
@@ -77,6 +89,7 @@ class CompetitionDatabases:
             "description": "",
             "requirement": "",
             "formation": "",
+            "format": "",
             "registration_window": now,
             "competition_window": now,
             "submission_deadline": now,
@@ -115,6 +128,7 @@ class CompetitionDatabases:
         fee: Optional[int] = None,
         fee_token_address: Optional[str] = None,
         formation: str = "",
+        format: str = "",
         price_competition_fee_id: Optional[int] = None,
         winners: Optional[List[Dict[str, Any]]] = None,
         chain_id: Optional[int] = None,
@@ -201,8 +215,17 @@ class CompetitionDatabases:
                 )
                 result = await db.exec(statement)
                 existing = result.first()
+                if not existing:
+                    stmt_fallback = select(CompetitionModel).where(
+                        (CompetitionModel.competition_id == competition_id)
+                        | (CompetitionModel.id == competition_id)
+                    )
+                    res_fallback = await db.exec(stmt_fallback)
+                    existing = res_fallback.first()
 
             if existing:
+                if isinstance(existing, (tuple, list)):
+                    existing = existing[0]
                 existing.tx_hash = tx_hash
                 existing.user_id = user.id
                 existing.name = name
@@ -210,6 +233,7 @@ class CompetitionDatabases:
                 existing.description = description
                 existing.requirement = requirement
                 existing.formation = formation
+                existing.format = format
                 existing.registration_window = registration_window
                 existing.competition_window = competition_window
                 existing.submission_deadline = submission_deadline
@@ -241,6 +265,7 @@ class CompetitionDatabases:
                     "description": description,
                     "requirement": requirement,
                     "formation": formation,
+                    "format": format,
                     "registration_window": registration_window,
                     "competition_window": competition_window,
                     "submission_deadline": submission_deadline,

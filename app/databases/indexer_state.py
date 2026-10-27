@@ -1,5 +1,6 @@
 import logging
-from typing import Optional
+from typing import Optional, List, Any
+from sqlalchemy.sql import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -8,6 +9,17 @@ from app.configs.database import AsyncSessionLocal
 from app.models.indexer_state import IndexerStateModel
 
 logger = logging.getLogger("web3_indexer")
+
+
+def _unpack(row: Any) -> Any:
+    if row is None:
+        return None
+    if isinstance(row, (tuple, list)) or hasattr(row, "_mapping"):
+        try:
+            return row[0]
+        except Exception:
+            return row
+    return row
 
 
 class IndexerStateDatabases:
@@ -24,6 +36,27 @@ class IndexerStateDatabases:
         )
 
     @staticmethod
+    async def get_all_states(
+        chain_id: Optional[int] = None,
+        session: Optional[AsyncSession] = None,
+    ) -> List[IndexerStateModel]:
+        if chain_id is None:
+            chain_id = settings.chain_id
+
+        async def _impl(db: AsyncSession) -> List[IndexerStateModel]:
+            statement = select(IndexerStateModel).where(
+                IndexerStateModel.chain_id == chain_id
+            )
+            result = await db.exec(statement)
+            rows = result.all()
+            return [_unpack(r) for r in rows if r is not None]
+
+        if session is not None:
+            return await _impl(session)
+        async with AsyncSessionLocal() as db:
+            return await _impl(db)
+
+    @staticmethod
     async def get_state(
         contract_address: Optional[str] = None,
         chain_id: Optional[int] = None,
@@ -38,11 +71,11 @@ class IndexerStateDatabases:
 
         async def _impl(db: AsyncSession) -> Optional[IndexerStateModel]:
             statement = select(IndexerStateModel).where(
-                IndexerStateModel.contract_address == resolved_address,
+                func.lower(IndexerStateModel.contract_address) == resolved_address.lower(),
                 IndexerStateModel.chain_id == chain_id,
             )
             result = await db.exec(statement)
-            return result.first()
+            return _unpack(result.first())
 
         if session is not None:
             return await _impl(session)
@@ -62,11 +95,11 @@ class IndexerStateDatabases:
             contract_address, contract_name
         )
         statement = select(IndexerStateModel).where(
-            IndexerStateModel.contract_address == resolved_address,
+            func.lower(IndexerStateModel.contract_address) == resolved_address.lower(),
             IndexerStateModel.chain_id == chain_id,
         )
         result = await db.exec(statement)
-        existing = result.first()
+        existing = _unpack(result.first())
         if existing:
             return existing
         state = IndexerStateModel(
@@ -147,11 +180,11 @@ class IndexerStateDatabases:
 
         async def _impl(db: AsyncSession) -> Optional[int]:
             statement = select(IndexerStateModel).where(
-                IndexerStateModel.contract_address == resolved_address,
+                func.lower(IndexerStateModel.contract_address) == resolved_address.lower(),
                 IndexerStateModel.chain_id == chain_id,
             )
             result = await db.exec(statement)
-            state = result.first()
+            state = _unpack(result.first())
             return state.last_scanned_block if state else None
 
         try:
@@ -182,11 +215,11 @@ class IndexerStateDatabases:
 
         async def _impl(db: AsyncSession) -> IndexerStateModel:
             statement = select(IndexerStateModel).where(
-                IndexerStateModel.contract_address == resolved_address,
+                func.lower(IndexerStateModel.contract_address) == resolved_address.lower(),
                 IndexerStateModel.chain_id == chain_id,
             )
             result = await db.exec(statement)
-            existing = result.first()
+            existing = _unpack(result.first())
 
             if existing:
                 existing.last_scanned_block = last_scanned_block

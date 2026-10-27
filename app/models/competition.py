@@ -46,6 +46,7 @@ class CompetitionModel(SQLModel, table=True):
     description: str
     requirement: str
     formation: str
+    format: str
     registration_window: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False)
     )

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         CertificateParticipantWinnerMintedModel,
     )
     from app.models.participant_winner import ParticipantWinnerModel
+    from app.models.recomendation_team import RecomendationTeamModel
 
 
 class TeamModel(SQLModel, table=True):
@@ -86,5 +87,8 @@ class TeamModel(SQLModel, table=True):
         "CertificateParticipantWinnerMintedModel"
     ] = Relationship(back_populates="team")
     participant_winners: List["ParticipantWinnerModel"] = Relationship(
+        back_populates="team"
+    )
+    recomendation_team: Optional["RecomendationTeamModel"] = Relationship(
         back_populates="team"
     )

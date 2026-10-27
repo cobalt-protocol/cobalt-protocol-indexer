@@ -43,7 +43,25 @@ def create_db_and_tables() -> None:
     # Ensure participant_winner.participant and team_id are not unique (allow multiple participant_winner per participant and per team)
     try:
         from sqlalchemy import text
+
         with sync_engine.connect() as conn:
+            conn.execute(
+                text("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'indexer_state' AND column_name = 'contract_name'
+                    ) THEN
+                        ALTER TABLE indexer_state DROP CONSTRAINT IF EXISTS indexer_state_contract_name_chain_id_key;
+                        DROP INDEX IF EXISTS ix_indexer_state_contract_name;
+                        ALTER TABLE indexer_state RENAME COLUMN contract_name TO contract_address;
+                        ALTER TABLE indexer_state ADD CONSTRAINT indexer_state_contract_address_chain_id_key UNIQUE (contract_address, chain_id);
+                        CREATE INDEX IF NOT EXISTS ix_indexer_state_contract_address ON indexer_state (contract_address);
+                    END IF;
+                END $$;
+            """)
+            )
             conn.execute(text("DROP INDEX IF EXISTS ix_participant_winner_participant;"))
             conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS ix_participant_winner_participant;"))
             conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS participant_winner_participant_key;"))
@@ -53,6 +71,10 @@ def create_db_and_tables() -> None:
             conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS ix_participant_winner_team_id;"))
             conn.execute(text("ALTER TABLE participant_winner DROP CONSTRAINT IF EXISTS participant_winner_team_id_key;"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_participant_winner_team_id ON participant_winner (team_id);"))
+
+            # Pastikan tipe kolom requirement di requirements_team dan content di recomendation_team bertipe TEXT
+            conn.execute(text("ALTER TABLE requirements_team ALTER COLUMN requirement TYPE TEXT;"))
+            conn.execute(text("ALTER TABLE recomendation_team ALTER COLUMN content TYPE TEXT;"))
             conn.commit()
     except Exception:
         pass

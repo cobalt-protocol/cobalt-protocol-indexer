@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, Text
 from sqlalchemy.sql import func
 from app.utils import generate_ulid
 
@@ -13,7 +13,7 @@ class RequirementsTeamModel(SQLModel, table=True):
     __tablename__ = "requirements_team"
 
     id: str = Field(default_factory=generate_ulid, primary_key=True)
-    requirement: str
+    requirement: str = Field(sa_column=Column(Text, nullable=False))
     team_id: str = Field(unique=True, foreign_key="team.id")
     created_at: Optional[datetime] = Field(
         default=None,

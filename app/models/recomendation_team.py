@@ -24,7 +24,7 @@ except ImportError:
 
 
 if TYPE_CHECKING:
-    from app.models.user import UserModel
+    from app.models.team import TeamModel
 
 
 class RecomendationTeamModel(SQLModel, table=True):
@@ -40,7 +40,7 @@ class RecomendationTeamModel(SQLModel, table=True):
         alias="metadata",
         sa_column=Column("metadata", JSON, nullable=True),
     )
-    user_id: str = Field(unique=True, foreign_key="users.id")
+    team_id: str = Field(unique=True, foreign_key="team.id")
 
     created_at: Optional[datetime] = Field(
         default=None,
@@ -62,5 +62,4 @@ class RecomendationTeamModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
-    user: Optional["UserModel"] = Relationship(back_populates="recomendation_team")
-
+    team: Optional["TeamModel"] = Relationship(back_populates="recomendation_team")

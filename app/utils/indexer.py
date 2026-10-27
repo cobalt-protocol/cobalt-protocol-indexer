@@ -203,58 +203,92 @@ class Web3Indexer:
         with open(abi_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    def _setup_contracts(self):
-        mapping = [
-            (
-                "CompetitionManager",
-                settings.competition_contract
-                or settings.certificate_competition_contract,
-                "CompetitionManager.json",
-            ),
-        ]
+    async def _setup_contracts(self):
+        from app.databases.indexer_state import IndexerStateDatabases
 
-        self.contract_configs = []
-        for name, address, abi_file in mapping:
-            if not address or not address.strip():
-                logger.warning(f"Contract {name} has no address configured, skipping.")
-                continue
+        env_addr = (
+            settings.competition_contract
+            or settings.certificate_competition_contract
+        )
+        if env_addr and env_addr.strip():
             try:
-                checksum_addr = AsyncWeb3.to_checksum_address(address.strip())
-                abi = self._load_abi(abi_file)
-                if not abi:
-                    logger.warning(
-                        f"ABI for contract {name} ({abi_file}) is empty or missing, skipping."
-                    )
+                env_checksum = AsyncWeb3.to_checksum_address(env_addr.strip())
+                await IndexerStateDatabases.ensure_state(
+                    contract_address=env_checksum,
+                    chain_id=settings.chain_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to ensure env contract in indexer_state: {e}"
+                )
+
+        states = await IndexerStateDatabases.get_all_states(
+            chain_id=settings.chain_id
+        )
+
+        abi = self._load_abi("CompetitionManager.json")
+        if not abi:
+            logger.warning(
+                "ABI for contract CompetitionManager (CompetitionManager.json) is empty or missing, skipping."
+            )
+            return
+
+        topic_map = {}
+        for item in abi:
+            if item.get("type") == "event":
+                event_name = item["name"]
+                if event_name in IGNORED_EVENTS:
                     continue
+                raw_topic = event_abi_to_log_topic(item).hex().lower()
+                topic_no_0x = raw_topic.replace("0x", "")
+                topic_with_0x = "0x" + topic_no_0x
+                topic_map[topic_no_0x] = event_name
+                topic_map[topic_with_0x] = event_name
+
+        existing_addresses = {
+            cfg["address"].lower() for cfg in self.contract_configs
+        }
+
+        for state in states:
+            if state is None:
+                continue
+            if isinstance(state, (tuple, list)) or hasattr(state, "_mapping"):
+                try:
+                    state = state[0]
+                except Exception:
+                    pass
+            address = getattr(state, "contract_address", None)
+            if not address or not str(address).strip():
+                continue
+            address = str(address).strip()
+            try:
+                checksum_addr = AsyncWeb3.to_checksum_address(address)
+                if checksum_addr.lower() in existing_addresses:
+                    continue
+
                 contract = self.w3.eth.contract(address=checksum_addr, abi=abi)
-
-                topic_map = {}
-                for item in abi:
-                    if item.get("type") == "event":
-                        event_name = item["name"]
-                        if event_name in IGNORED_EVENTS:
-                            continue
-                        topic0 = event_abi_to_log_topic(item).hex()
-                        topic_map[topic0] = event_name
-
                 self.contract_configs.append(
                     {
-                        "name": name,
+                        "name": "CompetitionManager",
                         "address": checksum_addr,
                         "contract": contract,
                         "topic_map": topic_map,
                     }
                 )
+                existing_addresses.add(checksum_addr.lower())
+                logger.info(
+                    f"Configured indexer for contract CompetitionManager ({checksum_addr}) on chain {settings.chain_id}"
+                )
             except Exception as e:
                 logger.error(
-                    f"Failed to setup contract {name} at address {address}: {e}"
+                    f"Failed to setup contract CompetitionManager at address {address}: {e}"
                 )
 
     async def start(self):
         if self.is_running:
             return
         self.is_running = True
-        self._setup_contracts()
+        await self._setup_contracts()
         self._task = asyncio.create_task(self._run_loop())
         logger.info("Web3 Indexer service started.")
 
@@ -281,8 +315,10 @@ class Web3Indexer:
                     await asyncio.sleep(settings.web3_poll_interval)
                     continue
 
+                await self._setup_contracts()
+
                 latest_block = await self.w3.eth.block_number
-                for cfg in self.contract_configs:
+                for cfg in list(self.contract_configs):
                     await self._index_contract(cfg, latest_block)
 
             except asyncio.CancelledError:
@@ -295,59 +331,77 @@ class Web3Indexer:
     async def _index_contract(self, cfg: Dict[str, Any], latest_block: int):
         name = cfg["name"]
         address = cfg["address"]
-        contract_addr = (
-            settings.competition_contract
-            or address
-            or ""
-        )
+        contract_key = address.lower()
+        contract_addr = address
 
-        if name not in self.last_scanned_blocks:
+        if contract_key not in self.last_scanned_blocks:
             db_block = await IndexerStateDatabases.get_last_scanned_block(
                 contract_address=contract_addr, chain_id=settings.chain_id
             )
-            if db_block is not None:
-                self.last_scanned_blocks[name] = db_block
-                logger.info(
-                    f"Restored last_scanned_block for {name} ({contract_addr}) from DB: {db_block}"
-                )
-            elif settings.web3_start_block is not None:
-                from_block = settings.web3_start_block
-                self.last_scanned_blocks[name] = max(0, from_block - 1)
+            if db_block is not None and db_block > 0:
+                if (
+                    (latest_block - db_block) > 50000
+                    and (settings.web3_start_block is None or settings.web3_start_block <= 0)
+                ):
+                    logger.warning(
+                        f"Stored last_scanned_block {db_block} for {name} ({contract_addr}) is too far behind latest block {latest_block} (>50000 blocks). Fast-forwarding to {latest_block - 2000}."
+                    )
+                    start_block = max(0, latest_block - 2000)
+                else:
+                    start_block = db_block
+                    logger.info(
+                        f"Restored last_scanned_block for {name} ({contract_addr}) from DB: {db_block}"
+                    )
+            elif settings.web3_start_block is not None and settings.web3_start_block > 0:
+                start_block = max(0, settings.web3_start_block - 1)
             else:
-                from_block = max(0, latest_block - 100)
-                self.last_scanned_blocks[name] = max(0, from_block - 1)
+                start_block = max(0, latest_block - 2000)
+                logger.info(
+                    f"No previous valid block for {name} ({contract_addr}), starting from block {start_block + 1} (latest: {latest_block})"
+                )
 
-        from_block = self.last_scanned_blocks[name] + 1
-        if from_block > latest_block:
-            return
+            self.last_scanned_blocks[contract_key] = start_block
 
-        batch_size = 1000
-        to_block = min(latest_block, from_block + batch_size - 1)
+        batch_size = 2000
+        max_batches_per_cycle = 25
+        batches_processed = 0
 
-        try:
-            logs = await self.w3.eth.get_logs(
-                {
-                    "address": address,
-                    "fromBlock": from_block,
-                    "toBlock": to_block,
-                }
-            )
+        while batches_processed < max_batches_per_cycle:
+            from_block = self.last_scanned_blocks[contract_key] + 1
+            if from_block > latest_block:
+                break
 
-            for log in logs:
-                await self._process_log(cfg, log)
+            to_block = min(latest_block, from_block + batch_size - 1)
 
-            self.last_scanned_blocks[name] = to_block
-            self.last_updated_at[name] = datetime.now(timezone.utc).isoformat()
-            await IndexerStateDatabases.set_last_scanned_block(
-                contract_address=contract_addr,
-                last_scanned_block=to_block,
-                chain_id=settings.chain_id,
-            )
+            try:
+                logs = await self.w3.eth.get_logs(
+                    {
+                        "address": address,
+                        "fromBlock": from_block,
+                        "toBlock": to_block,
+                    }
+                )
 
-        except Exception as e:
-            logger.error(
-                f"Error indexing {name} from block {from_block} to {to_block}: {e}"
-            )
+                for log in logs:
+                    await self._process_log(cfg, log)
+
+                self.last_scanned_blocks[contract_key] = to_block
+                self.last_updated_at[contract_key] = datetime.now(timezone.utc).isoformat()
+                await IndexerStateDatabases.set_last_scanned_block(
+                    contract_address=contract_addr,
+                    last_scanned_block=to_block,
+                    chain_id=settings.chain_id,
+                )
+                batches_processed += 1
+
+                if to_block >= latest_block:
+                    break
+
+            except Exception as e:
+                logger.error(
+                    f"Error indexing {name} ({address}) from block {from_block} to {to_block}: {e}"
+                )
+                break
 
     async def _process_log(self, cfg: Dict[str, Any], log: Any):
         name = cfg["name"]
@@ -359,14 +413,31 @@ class Web3Indexer:
         if not topics:
             return
 
-        topic0 = HexBytes(topics[0]).hex()
-        event_name = topic_map.get(topic0)
+        raw_t0 = HexBytes(topics[0]).hex().lower()
+        t0_no_0x = raw_t0.replace("0x", "")
+        t0_with_0x = "0x" + t0_no_0x
+
+        event_name = (
+            topic_map.get(t0_no_0x)
+            or topic_map.get(t0_with_0x)
+            or topic_map.get(raw_t0)
+        )
         if not event_name or event_name in IGNORED_EVENTS:
             return
 
-        tx_hash = _ensure_0x_hash(log["transactionHash"])
-        log_index = int(log["logIndex"])
-        block_number = int(log["blockNumber"])
+        tx_hash = _ensure_0x_hash(log.get("transactionHash", ""))
+        raw_log_idx = log.get("logIndex", 0)
+        log_index = (
+            int(raw_log_idx, 16)
+            if isinstance(raw_log_idx, str)
+            else int(raw_log_idx or 0)
+        )
+        raw_block = log.get("blockNumber", 0)
+        block_number = (
+            int(raw_block, 16)
+            if isinstance(raw_block, str)
+            else int(raw_block or 0)
+        )
 
         try:
             event_obj = getattr(contract.events, event_name)().process_log(log)
@@ -385,10 +456,7 @@ class Web3Indexer:
 
             await self._print_event_details(event_name, cleaned_args, tx_hash)
 
-            contract_addr = (
-                settings.competition_contract
-                or address
-            )
+            contract_addr = address
 
             if event_name in (
                 "CompetitionCreated",
@@ -1227,13 +1295,22 @@ class Web3Indexer:
                     user = user[0]
 
                 # 2. Competition
+                comp_id_str = str(competition_id)
                 stmt_comp = select(CompetitionModel).where(
-                    (CompetitionModel.competition_id == competition_id)
-                    | (CompetitionModel.id == competition_id),
+                    (CompetitionModel.competition_id == comp_id_str)
+                    | (CompetitionModel.id == comp_id_str),
                     CompetitionModel.indexer_state_id == indexer_state_id,
                 )
                 res_comp = await db.exec(stmt_comp)
                 competition = res_comp.first()
+                if not competition:
+                    stmt_fallback = select(CompetitionModel).where(
+                        (CompetitionModel.competition_id == comp_id_str)
+                        | (CompetitionModel.id == comp_id_str)
+                    )
+                    res_fallback = await db.exec(stmt_fallback)
+                    competition = res_fallback.first()
+
                 if not competition:
                     logger.warning(
                         f"Competition {competition_id} not found for TeamPaymentCreated"
@@ -1242,29 +1319,116 @@ class Web3Indexer:
                 elif isinstance(competition, (tuple, list)):
                     competition = competition[0]
 
-                # 3. Check if team was already created for this user & competition (via API or previous event)
-                stmt_existing_user_team = select(TeamModel).where(
-                    TeamModel.competition_id == competition.id,
-                    (TeamModel.user_id == user.id)
-                    | (
-                        TeamModel.id.in_(
-                            select(TeamRoleModel.team_id).where(
-                                TeamRoleModel.user_id == user.id
+                if indexer_state_id and getattr(competition, "indexer_state_id", None) != indexer_state_id:
+                    competition.indexer_state_id = indexer_state_id
+                    db.add(competition)
+
+                # 3. Process IPFS data
+                name = str(ipfs_data.get("name") or "").strip()
+                if not name:
+                    name = f"Team {secrets.token_hex(3).upper()}"
+
+                visibility = bool(ipfs_data.get("visibility", True))
+                description = str(ipfs_data.get("description") or "").strip()
+
+                # Ambil data skills hanya dari array skills_team (description TIDAK diolah ke skills_team)
+                skills = ipfs_data.get("skills_team")
+                if not isinstance(skills, list):
+                    skills = ipfs_data.get("skills")
+                if not isinstance(skills, list):
+                    skills = []
+
+                skills_list = []
+                for s in skills:
+                    if isinstance(s, dict):
+                        val = str(s.get("name") or "").strip()
+                    else:
+                        val = str(s).strip()
+                    if val:
+                        skills_list.append(val)
+
+                # 4. Check if an unlinked team was already created for this user & competition via API (tx_hash is None)
+                # 1 user can have multiple teams. We ONLY link if there is a team without tx_hash yet.
+                existing_unlinked_team = None
+                if name:
+                    stmt_unlinked_team = select(TeamModel).where(
+                        TeamModel.competition_id == competition.id,
+                        (TeamModel.user_id == user.id)
+                        | (
+                            TeamModel.id.in_(
+                                select(TeamRoleModel.team_id).where(
+                                    TeamRoleModel.user_id == user.id
+                                )
                             )
+                        ),
+                        TeamModel.tx_hash.is_(None),
+                        func.lower(func.trim(TeamModel.name)) == func.lower(name),
+                        TeamModel.deleted_at.is_(None),
+                    )
+                    res_unlinked = await db.exec(stmt_unlinked_team)
+                    existing_unlinked_team = res_unlinked.first()
+                    if existing_unlinked_team and isinstance(existing_unlinked_team, (tuple, list)):
+                        existing_unlinked_team = existing_unlinked_team[0]
+
+                if not existing_unlinked_team:
+                    # Fallback: check any unlinked team by this user with tx_hash is None in this competition
+                    stmt_fallback_unlinked = select(TeamModel).where(
+                        TeamModel.competition_id == competition.id,
+                        (TeamModel.user_id == user.id)
+                        | (
+                            TeamModel.id.in_(
+                                select(TeamRoleModel.team_id).where(
+                                    TeamRoleModel.user_id == user.id
+                                )
+                            )
+                        ),
+                        TeamModel.tx_hash.is_(None),
+                        TeamModel.deleted_at.is_(None),
+                    )
+                    res_fallback = await db.exec(stmt_fallback_unlinked)
+                    existing_unlinked_team = res_fallback.first()
+                    if existing_unlinked_team and isinstance(existing_unlinked_team, (tuple, list)):
+                        existing_unlinked_team = existing_unlinked_team[0]
+
+                if existing_unlinked_team:
+                    existing_unlinked_team.tx_hash = tx_hash
+                    db.add(existing_unlinked_team)
+                    await db.commit()
+                    await db.refresh(existing_unlinked_team)
+
+                    # Ensure recomendation_team embedding is created if not exists
+                    try:
+                        from app.models.recomendation_team import RecomendationTeamModel
+                        stmt_rec_check = select(RecomendationTeamModel).where(
+                            RecomendationTeamModel.team_id == existing_unlinked_team.id
                         )
-                    ),
-                    TeamModel.deleted_at.is_(None),
-                )
-                res_user_team = await db.exec(stmt_existing_user_team)
-                existing_user_team = res_user_team.first()
-                if existing_user_team:
-                    if isinstance(existing_user_team, (tuple, list)):
-                        existing_user_team = existing_user_team[0]
-                    if not existing_user_team.tx_hash or existing_user_team.tx_hash != tx_hash:
-                        existing_user_team.tx_hash = tx_hash
-                        db.add(existing_user_team)
-                        await db.commit()
-                        await db.refresh(existing_user_team)
+                        res_rec_check = await db.exec(stmt_rec_check)
+                        rec_row = res_rec_check.first()
+                        if not rec_row:
+                            from app.utils.langchain_embed import embeddings
+
+                            skills_str = ", ".join(skills_list)
+                            rec_content = f"team dengan team_id : {existing_unlinked_team.id} membutuhkan seseorang dengan skill : {skills_str}, dengan deskripsi : {description}"
+                            rec_metadata = {"source": "dokumen_panjang.txt"}
+
+                            vector = await asyncio.to_thread(embeddings.embed_query, rec_content)
+                            db.add(
+                                RecomendationTeamModel(
+                                    team_id=existing_unlinked_team.id,
+                                    content=rec_content,
+                                    embedding=vector,
+                                    metadata_=rec_metadata,
+                                )
+                            )
+                            await db.commit()
+                            logger.info(
+                                f"Created recomendation_team for existing unlinked team_id={existing_unlinked_team.id}"
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to create recomendation_team for existing unlinked team: {e}"
+                        )
+
                     if signature:
                         from sqlalchemy import delete
                         from app.models.signature_team_payment import (
@@ -1279,24 +1443,11 @@ class Web3Indexer:
                         )
                         await db.commit()
                     logger.info(
-                        f"Successfully linked tx_hash={tx_hash} to existing team (team_id: {existing_user_team.id}), prevented duplicate team insert."
+                        f"Successfully linked tx_hash={tx_hash} to existing unlinked team (team_id: {existing_unlinked_team.id}, name: '{existing_unlinked_team.name}')."
                     )
                     return
 
-                # 4. Process IPFS data
-                name = str(ipfs_data.get("name") or "").strip()
-                if not name:
-                    name = f"Team {secrets.token_hex(3).upper()}"
-
-                visibility = bool(ipfs_data.get("visibility", True))
-                description = str(ipfs_data.get("description") or "").strip()
-
-                skills = ipfs_data.get("skills_team") or ipfs_data.get("skills")
-                if not isinstance(skills, list):
-                    skills = []
-                skills_list = [str(s).strip() for s in skills if str(s).strip()]
-
-                # 5. Create Team with tx_hash
+                # 5. Create new Team with tx_hash (allows 1 user to have multiple teams)
                 team = TeamModel(
                     name=name,
                     visibility=visibility,
@@ -1329,6 +1480,32 @@ class Web3Indexer:
                     team_code_str = f"COBALT-{secrets.token_hex(5).upper()}"
                     team_code = TeamCodeModel(code=team_code_str, team_id=team.id)
                     db.add(team_code)
+
+                # 9. Create RecomendationTeam (Embedding of requirement & skills)
+                try:
+                    from app.models.recomendation_team import RecomendationTeamModel
+                    from app.utils.langchain_embed import embeddings
+
+                    skills_str = ", ".join(skills_list)
+                    rec_content = f"team dengan team_id : {team.id} membutuhkan seseorang dengan skill : {skills_str}, dengan deskripsi : {description}"
+                    rec_metadata = {"source": "dokumen_panjang.txt"}
+
+                    vector = await asyncio.to_thread(embeddings.embed_query, rec_content)
+
+                    rec_team = RecomendationTeamModel(
+                        team_id=team.id,
+                        content=rec_content,
+                        embedding=vector,
+                        metadata_=rec_metadata,
+                    )
+                    db.add(rec_team)
+                    logger.info(
+                        f"Generated embedding and created recomendation_team for team_id={team.id}"
+                    )
+                except Exception as embed_err:
+                    logger.error(
+                        f"Failed to generate embedding / create recomendation_team for team_id={team.id}: {embed_err}"
+                    )
 
                 await db.commit()
 
@@ -1435,11 +1612,10 @@ class Web3Indexer:
                 )
                 return
 
-            # CompetitionCreated event args: id, organization, cid, formation,
-            # prizeCertificateClaim, certificateCID, priceCompetitionFeeId, signature
+            # CompetitionCreated event args: id, organization, cid, certificateCID,
+            # priceCompetitionFeeId, signature (formation & schedule are fetched from IPFS cid)
             comp_cid = str(args.get("cid") or "")
             certificate_cid = str(args.get("certificateCID") or "")
-            formation = str(args.get("formation") or "")
             wallet_address = str(args.get("organization") or "")
             competition_id = str(args.get("id") or "")
             signature = str(args.get("signature") or "")
@@ -1451,6 +1627,8 @@ class Web3Indexer:
 
             ipfs_data = await self._fetch_from_ipfs(comp_cid) if comp_cid else {}
 
+            formation = str(ipfs_data.get("formation") or args.get("formation") or "")
+            format_ = str(ipfs_data.get("format") or args.get("format") or "")
             name = str(ipfs_data.get("name") or "")
             category = str(ipfs_data.get("category") or "")
             description = str(ipfs_data.get("description") or "")
@@ -1533,6 +1711,7 @@ class Web3Indexer:
                 description=description,
                 requirement=requirement,
                 formation=formation,
+                format=format_,
                 registration_window=registration_window,
                 competition_window=competition_window,
                 submission_deadline=submission_deadline,
@@ -1613,7 +1792,12 @@ class Web3Indexer:
                 print(
                     f"     Requirements:            {ipfs_data.get('requirements') or ipfs_data.get('requirement')}"
                 )
-                print(f"     Formation:               {args.get('formation')}")
+                print(
+                    f"     Formation:               {ipfs_data.get('formation') or args.get('formation')}"
+                )
+                print(
+                    f"     Format:                  {ipfs_data.get('format') or args.get('format')}"
+                )
                 print(f"     Schedule:")
                 print(
                     f"       Registration Window:   {sched.get('registrationWindow') or sched.get('registration_window')}"
@@ -1794,12 +1978,13 @@ class Web3Indexer:
         for cfg in self.contract_configs:
             name = cfg["name"]
             addr = cfg["address"]
+            contract_key = addr.lower()
             status_data["contracts"].append(
                 {
                     "contract_name": name,
                     "contract_address": addr,
-                    "last_scanned_block": self.last_scanned_blocks.get(name, 0),
-                    "updated_at": self.last_updated_at.get(name),
+                    "last_scanned_block": self.last_scanned_blocks.get(contract_key, 0),
+                    "updated_at": self.last_updated_at.get(contract_key),
                 }
             )
         return status_data

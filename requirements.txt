@@ -69,6 +69,10 @@ ipython==8.39.0
 jedi==0.20.0
 Jinja2==3.1.6
 jinja2-time==0.2.0
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-text-splitters>=0.2.0
+langchain-huggingface>=0.0.3
 lazyasd==0.1.4
 lru-dict==1.4.1
 markdown-it-py==4.2.0
