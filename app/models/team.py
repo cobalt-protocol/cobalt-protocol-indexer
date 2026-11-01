@@ -8,7 +8,6 @@ from app.utils import generate_ulid
 if TYPE_CHECKING:
     from app.models.competition import CompetitionModel
     from app.models.user import UserModel
-    from app.models.skills_team import SkillsTeamModel
     from app.models.requirements_team import RequirementsTeamModel
     from app.models.team_code import TeamCodeModel
     from app.models.team_role import TeamRoleModel
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
     )
     from app.models.participant_winner import ParticipantWinnerModel
     from app.models.recomendation_team import RecomendationTeamModel
+    from app.models.skills_team import SkillsTeamModel
 
 
 class TeamModel(SQLModel, table=True):
@@ -33,7 +33,7 @@ class TeamModel(SQLModel, table=True):
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     name: str
     visibility: bool
-    description: str
+    requirement: str
     competition_id: str = Field(foreign_key="competition.id")
     user_id: str = Field(foreign_key="users.id")
     tx_hash: Optional[str] = Field(default=None, index=True)

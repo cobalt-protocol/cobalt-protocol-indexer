@@ -1239,9 +1239,9 @@ class Web3Indexer:
             from app.models.user import UserModel
             from app.models.competition import CompetitionModel
             from app.models.team import TeamModel
+            from app.models.skills_team import SkillsTeamModel
             from app.models.team_role import TeamRoleModel
             from app.models.team_code import TeamCodeModel
-            from app.models.skills_team import SkillsTeamModel
             from app.models.requirements_team import RequirementsTeamModel
             import secrets
 
@@ -1329,7 +1329,7 @@ class Web3Indexer:
                     name = f"Team {secrets.token_hex(3).upper()}"
 
                 visibility = bool(ipfs_data.get("visibility", True))
-                description = str(ipfs_data.get("description") or "").strip()
+                requirement = str(ipfs_data.get("requirement") or ipfs_data.get("description") or "").strip()
 
                 # Ambil data skills hanya dari array skills_team (description TIDAK diolah ke skills_team)
                 skills = ipfs_data.get("skills_team")
@@ -1408,7 +1408,7 @@ class Web3Indexer:
                             from app.utils.langchain_embed import embeddings
 
                             skills_str = ", ".join(skills_list)
-                            rec_content = f"team dengan team_id : {existing_unlinked_team.id} membutuhkan seseorang dengan skill : {skills_str}, dengan deskripsi : {description}"
+                            rec_content = f"team dengan team_id : {existing_unlinked_team.id} membutuhkan seseorang dengan skill : {skills_str}, dengan deskripsi : {requirement}"
                             rec_metadata = {"source": "dokumen_panjang.txt"}
 
                             vector = await asyncio.to_thread(embeddings.embed_query, rec_content)
@@ -1451,7 +1451,7 @@ class Web3Indexer:
                 team = TeamModel(
                     name=name,
                     visibility=visibility,
-                    description=description,
+                    requirement=requirement,
                     competition_id=competition.id,
                     user_id=user.id,
                     tx_hash=tx_hash,
@@ -1466,7 +1466,7 @@ class Web3Indexer:
 
                 # 6. Create RequirementsTeam
                 req_team = RequirementsTeamModel(
-                    requirement=description, team_id=team.id
+                    requirement=requirement, team_id=team.id
                 )
                 db.add(req_team)
 
@@ -1487,7 +1487,7 @@ class Web3Indexer:
                     from app.utils.langchain_embed import embeddings
 
                     skills_str = ", ".join(skills_list)
-                    rec_content = f"team dengan team_id : {team.id} membutuhkan seseorang dengan skill : {skills_str}, dengan deskripsi : {description}"
+                    rec_content = f"team dengan team_id : {team.id} membutuhkan seseorang dengan skill : {skills_str}, dengan deskripsi : {requirement}"
                     rec_metadata = {"source": "dokumen_panjang.txt"}
 
                     vector = await asyncio.to_thread(embeddings.embed_query, rec_content)

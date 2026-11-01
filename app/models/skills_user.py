@@ -16,6 +16,7 @@ class SkillUserModel(SQLModel, table=True):
     id: str = Field(default_factory=generate_ulid, primary_key=True)
     user_id: str = Field(foreign_key="users.id")
     skill_name: str
+    level: str = Field(default="Intermediate")
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(
